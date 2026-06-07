@@ -11,7 +11,6 @@
 #include <memory>
 #include <mutex>
 
-// A utility class to hold multiple 3D objects in the scene
 class hittable_list : public hittable {
 public:
     std::vector<std::shared_ptr<hittable>> objects;
@@ -19,7 +18,6 @@ public:
     hittable_list() {}
     void add(std::shared_ptr<hittable> object) { objects.push_back(object); }
 
-    // Iterates through all objects to find which one the ray hits first
     virtual bool hit(const ray& r, double t_min, double t_max, hit_record& rec) const override {
         hit_record temp_rec;
         bool hit_anything = false;
@@ -36,18 +34,16 @@ public:
     }
 };
 
-// Recursive function: Bounces the ray off objects until it hits the sky or runs out of energy
 color ray_color(const ray& r, const hittable& world, int depth) {
-    if (depth <= 0) return color(0,0,0); // Photon absorbed
+    if (depth <= 0) return color(0,0,0);
 
     hit_record rec;
-    // Check if the ray hits anything in the world (0.001 fixes shadow acne/floating point errors)
     if (world.hit(r, 0.001, 1000.0, rec)) {
-        vec3 target = rec.p + rec.normal + vec3(0.5, 0.5, 0.5); // Simplified random scatter (matte)
+        // True Lambertian Diffuse Bounce
+        point3 target = rec.p + rec.normal + random_in_unit_sphere();
         return ray_color(ray(rec.p, target - rec.p), world, depth - 1) * 0.5;
     }
 
-    // Sky gradient background
     vec3 unit_direction = r.direction().normalize();
     double t = 0.5 * (unit_direction.y() + 1.0);
     return color(1.0, 1.0, 1.0) * (1.0 - t) + color(0.5, 0.7, 1.0) * t;
@@ -58,6 +54,7 @@ int main() {
     const double aspect_ratio = 16.0 / 9.0;
     const int image_width = 1920;
     const int image_height = static_cast<int>(image_width / aspect_ratio);
+    const int samples_per_pixel = 50; // Anti-aliasing quality
     const int max_bounces = 10;
 
     // 2. Camera Abstraction
@@ -65,13 +62,13 @@ int main() {
 
     // 3. World Composition
     hittable_list world;
-    world.add(std::make_shared<sphere>(point3(0, 0, -1), 0.5));           // Main sphere
-    world.add(std::make_shared<sphere>(point3(0, -100.5, -1), 100.0));    // Giant sphere acting as the ground
+    world.add(std::make_shared<sphere>(point3(0, 0, -1), 0.5));
+    world.add(std::make_shared<sphere>(point3(0, -100.5, -1), 100.0));
 
     // 4. Threading Setup
     std::vector<color> image_buffer(image_width * image_height);
     int num_threads = std::thread::hardware_concurrency();
-    if (num_threads == 0) num_threads = 4; // Fallback
+    if (num_threads == 0) num_threads = 4;
 
     std::vector<std::thread> threads;
     int rows_per_thread = image_height / num_threads;
@@ -85,18 +82,28 @@ int main() {
     auto render_chunk = [&](int start_row, int end_row) {
         for (int j = start_row; j < end_row; ++j) {
             for (int i = 0; i < image_width; ++i) {
-                double u = double(i) / (image_width - 1);
-                double v = double(j) / (image_height - 1);
+                color pixel_color(0, 0, 0);
 
-                ray r = cam.get_ray(u, v);
-                color pixel_color = ray_color(r, world, max_bounces);
+                // Anti-Aliasing Loop: Shoot multiple rays with slight random offsets
+                for (int s = 0; s < samples_per_pixel; ++s) {
+                    double u = (i + random_double()) / (image_width - 1);
+                    double v = (j + random_double()) / (image_height - 1);
+                    ray r = cam.get_ray(u, v);
+                    pixel_color = pixel_color + ray_color(r, world, max_bounces);
+                }
 
-                // Buffer indices flow top-to-bottom, but rendering math is bottom-up.
+                // Divide the color by the number of samples
+                double scale = 1.0 / samples_per_pixel;
+
+                // Gamma 2.2 Correction (taking the square root of the color)
+                double r_gamma = std::sqrt(pixel_color.x() * scale);
+                double g_gamma = std::sqrt(pixel_color.y() * scale);
+                double b_gamma = std::sqrt(pixel_color.z() * scale);
+
                 int buffer_index = (image_height - 1 - j) * image_width + i;
-                image_buffer[buffer_index] = pixel_color;
+                image_buffer[buffer_index] = color(r_gamma, g_gamma, b_gamma);
             }
 
-            // Thread-safe progress tracking
             std::lock_guard<std::mutex> lock(progress_mutex);
             rows_completed++;
             std::cerr << "\rScanlines completed: " << rows_completed << "/" << image_height << ' ' << std::flush;
@@ -106,12 +113,10 @@ int main() {
     // 6. Dispatch Threads
     for (int t = 0; t < num_threads; ++t) {
         int start_row = t * rows_per_thread;
-        // Ensure the last thread picks up any remaining rows due to division truncation
         int end_row = (t == num_threads - 1) ? image_height : (t + 1) * rows_per_thread;
         threads.emplace_back(render_chunk, start_row, end_row);
     }
 
-    // 7. Await Thread Completion
     for (auto& thread : threads) {
         thread.join();
     }
@@ -122,9 +127,9 @@ int main() {
     out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
 
     for (const auto& pixel : image_buffer) {
-        out << static_cast<int>(255.999 * pixel.x()) << ' '
-            << static_cast<int>(255.999 * pixel.y()) << ' '
-            << static_cast<int>(255.999 * pixel.z()) << '\n';
+        out << static_cast<int>(256 * clamp(pixel.x(), 0.0, 0.999)) << ' '
+            << static_cast<int>(256 * clamp(pixel.y(), 0.0, 0.999)) << ' '
+            << static_cast<int>(256 * clamp(pixel.z(), 0.0, 0.999)) << '\n';
     }
 
     std::cerr << "Render Complete.\n";
