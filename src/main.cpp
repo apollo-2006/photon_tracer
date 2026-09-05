@@ -1,8 +1,8 @@
-#include "../include/vec3.hpp"
-#include "../include/ray.hpp"
-#include "../include/hittable.hpp"
-#include "../include/sphere.hpp"
-#include "../include/camera.hpp"
+#include "vec3.hpp"
+#include "ray.hpp"
+#include "hittable.hpp"
+#include "sphere.hpp"
+#include "camera.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -95,7 +95,9 @@ int main() {
                 // Divide the color by the number of samples
                 double scale = 1.0 / samples_per_pixel;
 
-                // Gamma 2.2 Correction (taking the square root of the color)
+                // Gamma correction. Taking the square root is gamma 2.0, not 2.2 --
+                // an approximation of sRGB that is close enough by eye and one
+                // instruction instead of a pow().
                 double r_gamma = std::sqrt(pixel_color.x() * scale);
                 double g_gamma = std::sqrt(pixel_color.y() * scale);
                 double b_gamma = std::sqrt(pixel_color.z() * scale);
@@ -121,9 +123,13 @@ int main() {
         thread.join();
     }
 
-    // 8. Output to File
+    // 7. Output to File
     std::cerr << "\nWriting to render.ppm...\n";
     std::ofstream out("render.ppm");
+    if (!out) {
+        std::cerr << "Failed to open render.ppm for writing.\n";
+        return 1;
+    }
     out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
 
     for (const auto& pixel : image_buffer) {

@@ -53,3 +53,8 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Build output for this project
+/photon_tracer
+render.ppm
+obj/
