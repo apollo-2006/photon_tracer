@@ -18,15 +18,17 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   sub-pixel offset, averaged. This is what removes the stair-stepping on sphere edges.
 * **Gamma correction.** Output is square-rooted before writing, an approximation of sRGB
   that keeps midtones from looking too dark.
-* **Multithreaded.** The image is split into horizontal bands, one per hardware thread.
-  The RNG is `thread_local`, so the workers never contend on it; the only shared mutable
-  state is the progress counter.
+* **Multithreaded.** One worker per hardware thread, each claiming the next unrendered row
+  from a shared atomic counter. Rows are not split into fixed bands up front, because the
+  top of the frame is sky (one miss per sample) and the bottom is ground (several
+  bounces), so fixed bands leave the sky threads idle. The RNG and the ray counter are
+  `thread_local`, so workers never contend on them.
 * **PPM output.** Written as plain ASCII P3 with no image library involved.
 
 ## Scene
 
-Two spheres: a 0.5-radius sphere at the origin, and a 100-radius sphere below it acting
-as the ground plane. The background is a vertical blue-to-white gradient interpolated on
+Two spheres: a 0.5-radius sphere at `(0, 0, -1)`, one unit in front of the camera, and a
+100-radius sphere below it acting as the ground plane. The background is a vertical blue-to-white gradient interpolated on
 the ray direction.
 
 ## Build & Run
@@ -47,6 +49,23 @@ viewers open it directly, or convert it with `magick render.ppm render.png`.
 
 Resolution, sample count and bounce depth are constants at the top of `src/main.cpp`.
 
+## Performance
+
+The renderer prints its own timing when it finishes. Ryzen 9 5900XT (16 cores, 32
+threads), g++ 16 `-O3`, 1920x1080, 50 samples per pixel, up to 10 bounces, best of three:
+
+| | |
+|---|---|
+| render | **0.51 s** |
+| rays traced | 184.6M (103.7M primary, the rest bounces) |
+| throughput | **~360M rays/s** |
+| whole run, including the 24 MB PPM write | 0.67 s |
+
+Handing out rows from a shared counter instead of fixed bands took the whole run from
+0.98 s to 0.67 s on the same machine, with identical output statistics. CPU time went up
+(13.3 s to 15.9 s) because threads that used to finish their band of sky and exit now
+keep working, which is the point: parallel speedup went from about 14x to 24x.
+
 ## Known limits
 
 * **Spheres only.** No planes, triangles, or meshes, so no model loading.
@@ -55,10 +74,11 @@ Resolution, sample count and bounce depth are constants at the top of `src/main.
 * **No light sources.** Illumination comes entirely from the sky gradient, which is why
   the scene reads as overcast.
 * **Fixed camera.** No position, orientation, field of view, or depth of field controls.
-* **No acceleration structure.** Every ray tests every object, which is fine for two
-  spheres and quadratic for a real scene. A BVH is the next thing this needs.
-* **Static work split.** Bands are handed out evenly up front, so a thread that draws a
-  cheap band finishes early and idles.
+* **No acceleration structure.** Every ray tests every object, so cost grows linearly with
+  object count per ray. Fine for two spheres, hopeless for a mesh. A BVH is the next thing
+  this needs.
+* **Row granularity.** Work is claimed a whole row at a time, so one expensive row still
+  runs on a single thread.
 
 ## Author
 **Abir Deol**

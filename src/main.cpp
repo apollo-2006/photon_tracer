@@ -10,6 +10,8 @@
 #include <thread>
 #include <memory>
 #include <mutex>
+#include <atomic>
+#include <chrono>
 
 class hittable_list : public hittable {
 public:
@@ -34,8 +36,13 @@ public:
     }
 };
 
+// Rays traced by this thread, primary and bounced. Summed after the render for
+// the rays/s figure; thread_local so counting costs no synchronization.
+thread_local long long rays_traced = 0;
+
 color ray_color(const ray& r, const hittable& world, int depth) {
     if (depth <= 0) return color(0,0,0);
+    ++rays_traced;
 
     hit_record rec;
     if (world.hit(r, 0.001, 1000.0, rec)) {
@@ -71,7 +78,13 @@ int main() {
     if (num_threads == 0) num_threads = 4;
 
     std::vector<std::thread> threads;
-    int rows_per_thread = image_height / num_threads;
+
+    // Rows are claimed one at a time from a shared counter rather than split
+    // into fixed bands. The top of the frame is sky, one miss per sample, and
+    // the bottom is ground with bounces, so fixed bands left the sky threads
+    // idle while the ground threads were still working.
+    std::atomic<int> next_row{0};
+    std::atomic<long long> total_rays{0};
 
     std::mutex progress_mutex;
     int rows_completed = 0;
@@ -79,8 +92,8 @@ int main() {
     std::cerr << "Initiating Engine using " << num_threads << " hardware threads...\n";
 
     // 5. The Render Worker Lambda
-    auto render_chunk = [&](int start_row, int end_row) {
-        for (int j = start_row; j < end_row; ++j) {
+    auto render_worker = [&]() {
+        for (int j = next_row.fetch_add(1); j < image_height; j = next_row.fetch_add(1)) {
             for (int i = 0; i < image_width; ++i) {
                 color pixel_color(0, 0, 0);
 
@@ -110,18 +123,20 @@ int main() {
             rows_completed++;
             std::cerr << "\rScanlines completed: " << rows_completed << "/" << image_height << ' ' << std::flush;
         }
+        total_rays += rays_traced;
     };
 
     // 6. Dispatch Threads
+    const auto render_start = std::chrono::steady_clock::now();
     for (int t = 0; t < num_threads; ++t) {
-        int start_row = t * rows_per_thread;
-        int end_row = (t == num_threads - 1) ? image_height : (t + 1) * rows_per_thread;
-        threads.emplace_back(render_chunk, start_row, end_row);
+        threads.emplace_back(render_worker);
     }
 
     for (auto& thread : threads) {
         thread.join();
     }
+    const double render_s =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - render_start).count();
 
     // 7. Output to File
     std::cerr << "\nWriting to render.ppm...\n";
@@ -139,5 +154,9 @@ int main() {
     }
 
     std::cerr << "Render Complete.\n";
+    std::cerr << image_width << "x" << image_height << " at " << samples_per_pixel
+              << " spp: rendered in " << render_s << " s, "
+              << static_cast<long long>(total_rays / render_s / 1e6) << "M rays/s ("
+              << total_rays << " rays) on " << num_threads << " threads\n";
     return 0;
 }
