@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>photon_tracer · a C++ path tracer in the browser</title>
+  <meta name="description" content="A multithreaded CPU path tracer written in C++, compiled to WebAssembly and run across Web Workers.">
+  <link rel="stylesheet" href="demo.css">
+  <style>
+    canvas { width: 100%; height: auto; display: block; border-radius: 8px; background: #000; image-rendering: auto; }
+    .ctl { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 10px; align-items: center; font-size: 0.85rem; }
+    .ctl output { font-family: var(--font-mono); min-width: 3.5em; text-align: right; }
+    .workers { display: flex; gap: 3px; align-items: flex-end; height: 70px; }
+    .workers div { flex: 1; background: var(--accent); opacity: 0.7; border-radius: 2px 2px 0 0; min-height: 2px; position: relative; }
+    .progress { height: 4px; background: var(--bg-sunk); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .progress div { height: 100%; width: 0; background: var(--accent-warm); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">photon_tracer · C++17 compiled to WebAssembly</p>
+      <h1>A path tracer on every core you have</h1>
+      <p class="lede">Each pixel below comes from <span class="mono">render_row()</span> in <span class="mono">include/renderer.hpp</span>,
+        the same function the native renderer calls, running in one Web Worker per thread. No graphics API: rays, spheres,
+        diffuse bounces and a sky, computed on the CPU and copied into a canvas.</p>
+    </div>
+    <nav class="links">
+      <a href="https://github.com/apollo-2006/photon_tracer">source</a>
+      <a href="https://abirdeol.tech/projects/photon-tracer">write-up</a>
+    </nav>
+  </header>
+
+  <div class="grid" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)">
+    <section class="panel">
+      <canvas id="out" width="960" height="540" aria-label="Rendered image"></canvas>
+      <div class="progress"><div id="bar"></div></div>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat"><b id="sTime">-</b><span>render time</span></div>
+        <div class="stat"><b id="sRays">-</b><span>rays traced</span></div>
+        <div class="stat"><b id="sRate">-</b><span>rays / s</span></div>
+        <div class="stat"><b id="sRows">-</b><span>rows</span></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Render settings</h2>
+      <div class="ctl">
+        <label for="res">resolution</label>
+        <select id="res" style="grid-column: span 2">
+          <option value="480">480 × 270</option>
+          <option value="960" selected>960 × 540</option>
+          <option value="1920">1920 × 1080 (the native default)</option>
+        </select>
+        <label for="spp">samples / pixel</label><input id="spp" type="range" min="1" max="100" value="20"><output id="sppV"></output>
+        <label for="bounces">max bounces</label><input id="bounces" type="range" min="1" max="20" value="10"><output id="bouncesV"></output>
+        <label for="threads">workers</label><input id="threads" type="range" min="1" max="32" value="4"><output id="threadsV"></output>
+        <label for="sched">scheduling</label>
+        <select id="sched" style="grid-column: span 2">
+          <option value="dynamic" selected>claim the next row (current)</option>
+          <option value="bands">fixed bands (the old split)</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button id="go">render</button>
+        <button id="stop" class="ghost" disabled>stop</button>
+      </div>
+
+      <h2 style="margin-top:18px">Rows each worker traced</h2>
+      <div class="workers" id="workers"></div>
+      <p class="small muted" id="schedNote" style="margin:8px 0 0"></p>
+    </section>
+  </div>
+
+  <p class="note" style="margin-top:18px">Try 1920 × 1080 at 100 samples with fixed bands, then switch back to claiming rows. On a 32-thread desktop that is
+    1.7 s against 1.15 s. The top of the
+    frame is sky, one miss per sample; the bottom is ground with several bounces. Fixed bands leave the sky workers idle while the
+    ground workers finish, which is why the native renderer moved to claiming rows from a shared counter.</p>
+
+  <footer>photon_tracer by <a href="https://abirdeol.tech">Abir Deol</a></footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -58,3 +58,4 @@ dkms.conf
 /photon_tracer
 render.ppm
 obj/
+web/dist/

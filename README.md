@@ -1,4 +1,13 @@
 # photon_tracer
+
+[![demo](https://github.com/apollo-2006/photon_tracer/actions/workflows/pages.yml/badge.svg)](https://github.com/apollo-2006/photon_tracer/actions/workflows/pages.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**[Render it in your browser →](https://apollo-2006.github.io/photon_tracer/)** The
+renderer is compiled to WebAssembly and runs in one Web Worker per thread, with controls
+for resolution, samples, bounces and worker count, and a switch between the current row
+scheduling and the old fixed bands so you can time the difference yourself.
+
 A CPU-based raytracer written from scratch in C++, built to explore computer graphics, vector mathematics, and physical rendering fundamentals. The engine calculates the intersection of light rays with 3D geometry to generate images entirely from scratch, with no external graphics libraries.
 
 ## How it works
@@ -48,6 +57,8 @@ Renders 1920x1080 at 50 samples per pixel. The output is a ~24 MB ASCII PPM; mos
 viewers open it directly, or convert it with `magick render.ppm render.png`.
 
 Resolution, sample count and bounce depth are constants at the top of `src/main.cpp`.
+The tracing itself (`ray_color`, the scene, and `render_row`) lives in
+`include/renderer.hpp`, shared with the web build.
 
 ## Performance
 
@@ -56,15 +67,34 @@ threads), g++ 16 `-O3`, 1920x1080, 50 samples per pixel, up to 10 bounces, best 
 
 | | |
 |---|---|
-| render | **0.51 s** |
+| render | **0.49 s** |
 | rays traced | 184.6M (103.7M primary, the rest bounces) |
-| throughput | **~360M rays/s** |
-| whole run, including the 24 MB PPM write | 0.67 s |
+| throughput | **~375M rays/s** |
+| whole run, including the 24 MB PPM write | 0.64 s |
 
 Handing out rows from a shared counter instead of fixed bands took the whole run from
 0.98 s to 0.67 s on the same machine, with identical output statistics. CPU time went up
 (13.3 s to 15.9 s) because threads that used to finish their band of sky and exit now
 keep working, which is the point: parallel speedup went from about 14x to 24x.
+
+In the browser demo, the same render at 100 samples per pixel across 32 Web Workers takes
+1.15 s at about 320M rays/s, and 1.73 s with fixed bands. WebAssembly gets within about
+15% of the native build's throughput here, since the inner loop is plain double-precision
+arithmetic.
+
+## Web demo
+
+`web/tracer_web.cpp` exposes `render_row()` to JavaScript and `web/build.sh` compiles it
+with Emscripten. The page runs one module instance per Web Worker and hands rows out
+from the main thread, which is the native scheduler with messages in place of an atomic
+counter; GitHub Pages cannot send the headers `SharedArrayBuffer` needs for real threads.
+GitHub Actions builds the native renderer and the demo and publishes it to Pages on every
+push to `main`.
+
+```bash
+web/build.sh                          # needs em++ on PATH
+python3 -m http.server -d web/dist    # then open http://localhost:8000
+```
 
 ## Known limits
 
@@ -80,5 +110,10 @@ keep working, which is the point: parallel speedup went from about 14x to 24x.
 * **Row granularity.** Work is claimed a whole row at a time, so one expensive row still
   runs on a single thread.
 
+## License
+
+MIT. See [LICENSE](LICENSE).
+
 ## Author
-**Abir Deol**
+
+**Abir Deol** · [abirdeol.tech](https://abirdeol.tech)
