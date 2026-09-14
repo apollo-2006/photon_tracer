@@ -8,5 +8,5 @@ em++ -std=c++17 -O3 -Wall -Wextra -I../include tracer_web.cpp \
   -sMODULARIZE=1 -sEXPORT_NAME=PhotonTracer -sENVIRONMENT=worker \
   -sEXPORTED_RUNTIME_METHODS=HEAPU8 -sALLOW_MEMORY_GROWTH=1 \
   -o dist/photon_tracer.js
-cp index.html app.js worker.js demo.css dist/
+cp index.html app.js worker.js demo.css og.jpg dist/
 echo "built web/dist"

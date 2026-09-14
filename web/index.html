@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>photon_tracer · a C++ path tracer in the browser</title>
   <meta name="description" content="A multithreaded CPU path tracer written in C++, compiled to WebAssembly and run across Web Workers.">
+  <meta name="theme-color" content="#070b12">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23070b12'/%3E%3Cpath d='M16 5l2.6 8.4L27 16l-8.4 2.6L16 27l-2.6-8.4L5 16l8.4-2.6z' fill='%23d9b98a'/%3E%3C/svg%3E">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Abir Deol">
+  <meta property="og:title" content="photon_tracer · a C++ path tracer in the browser">
+  <meta property="og:description" content="A multithreaded CPU path tracer written in C++, compiled to WebAssembly and run across Web Workers.">
+  <meta property="og:url" content="https://apollo-2006.github.io/photon_tracer/">
+  <meta property="og:image" content="https://apollo-2006.github.io/photon_tracer/og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="demo.css">
   <style>
     canvas { width: 100%; height: auto; display: block; border-radius: 8px; background: #000; image-rendering: auto; }
@@ -32,7 +43,7 @@
     </nav>
   </header>
 
-  <div class="grid" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr)">
+  <div class="split">
     <section class="panel">
       <canvas id="out" width="960" height="540" aria-label="Rendered image"></canvas>
       <div class="progress"><div id="bar"></div></div>
@@ -78,6 +89,19 @@
     frame is sky, one miss per sample; the bottom is ground with several bounces. Fixed bands leave the sky workers idle while the
     ground workers finish, which is why the native renderer moved to claiming rows from a shared counter.</p>
 
+  <nav class="more-demos" aria-label="Other demos">
+    <span>more demos</span>
+    <a href="https://apollo-2006.github.io/nexus_db/">nexus_db</a>
+    <a href="https://apollo-2006.github.io/nexus_cluster/">nexus_cluster</a>
+    <a href="https://apollo-2006.github.io/nexus_editor/">nexus_editor</a>
+    <a href="https://apollo-2006.github.io/nano_match/">nano_match</a>
+    <a href="https://apollo-2006.github.io/custom_mem_alloc/">custom_mem_alloc</a>
+    <a href="https://apollo-2006.github.io/neon_vm/">neon_vm</a>
+    <a href="https://apollo-2006.github.io/cpu_rasterizer/">cpu_rasterizer</a>
+    <a href="https://apollo-2006.github.io/rasterizer_engine/">rasterizer_engine</a>
+    <a href="https://apollo-2006.github.io/oracle-of-delphi/">oracle_of_delphi</a>
+    <a class="all" href="https://abirdeol.tech/projects?filter=live">all projects →</a>
+  </nav>
   <footer>photon_tracer by <a href="https://abirdeol.tech">Abir Deol</a></footer>
 </div>
 <script src="app.js"></script>
