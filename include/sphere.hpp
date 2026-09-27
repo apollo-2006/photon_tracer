@@ -3,13 +3,17 @@
 #include "hittable.hpp"
 #include "vec3.hpp"
 
+#include <memory>
+
+class material;
+
 class sphere : public hittable {
 public:
     point3 center;
     double radius;
+    std::shared_ptr<material> mat;
 
-    sphere() {}
-    sphere(point3 cen, double r) : center(cen), radius(r) {}
+    sphere(point3 cen, double r, std::shared_ptr<material> m) : center(cen), radius(r), mat(std::move(m)) {}
 
     // The 'override' keyword ensures we are properly adhering to the hittable interface
     virtual bool hit(const ray& r, double t_min, double t_max, hit_record& rec) const override {
@@ -38,6 +42,7 @@ public:
         // Calculate normal and determine if we hit the front or back face
         vec3 outward_normal = (rec.p - center) * (1.0 / radius);
         rec.set_face_normal(r, outward_normal);
+        rec.mat = mat.get();
 
         return true;
     }

@@ -19,10 +19,16 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   directly and returns the nearer root inside the valid `t` range. The `hittable`
   interface (`hittable.hpp`) keeps the intersection test behind a virtual call, so the
   world is just a list of things that know how to be hit.
-* **Diffuse bounce.** On a hit, a new ray is fired toward a random point in the unit
-  sphere above the surface and its result is halved, which is Lambertian scattering with
-  a 50% albedo. Recursion is capped at 10 bounces so a ray trapped between surfaces
-  terminates.
+* **Materials.** Each sphere carries a material (`material.hpp`) that decides how a
+  ray scatters and how much of each color channel survives:
+  * *Lambertian:* scatters toward the normal plus a random unit vector, a
+    cosine-weighted bounce, tinted by its albedo.
+  * *Metal:* mirror reflection, blurred by a `fuzz` factor from 0 (mirror) to 1.
+  * *Dielectric:* refracts by Snell's law, reflects under total internal reflection,
+    and otherwise chooses between the two with Schlick's approximation. A sphere with a
+    negative radius flips its normals inward, which makes a hollow glass shell.
+
+  Recursion is capped at 10 bounces so a ray trapped between surfaces terminates.
 * **Anti-aliasing by supersampling.** 50 rays per pixel, each jittered by a random
   sub-pixel offset, averaged. This is what removes the stair-stepping on sphere edges.
 * **Gamma correction.** Output is square-rooted before writing, an approximation of sRGB
@@ -36,8 +42,9 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
 
 ## Scene
 
-Two spheres: a 0.5-radius sphere at `(0, 0, -1)`, one unit in front of the camera, and a
-100-radius sphere below it acting as the ground plane. The background is a vertical blue-to-white gradient interpolated on
+Three 0.5-radius spheres one unit in front of the camera: hollow glass at `(-1, 0, -1)`,
+matte blue at `(0, 0, -1)` and fuzzy gold metal at `(1, 0, -1)`, on a 100-radius matte
+sphere acting as the ground plane. The background is a vertical blue-to-white gradient interpolated on
 the ray direction.
 
 ## Build & Run
@@ -99,8 +106,8 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
 ## Known limits
 
 * **Spheres only.** No planes, triangles, or meshes, so no model loading.
-* **One material.** Every surface is a 50%-albedo diffuse; no metals, glass, refraction,
-  or emissive surfaces.
+* **No emissive materials.** Surfaces can be matte, metal or glass, but none give off
+  light.
 * **No light sources.** Illumination comes entirely from the sky gradient, which is why
   the scene reads as overcast.
 * **Fixed camera.** No position, orientation, field of view, or depth of field controls.

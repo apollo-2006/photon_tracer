@@ -9,6 +9,7 @@ struct hit_record {
     vec3 normal;      // The surface normal vector
     double t;         // The distance along the ray
     bool front_face;  // Did we hit the outside or the inside?
+    const material* mat = nullptr;  // What the surface is made of
 
     // Determines if the ray hit the outside of the object or from the inside
     inline void set_face_normal(const ray& r, const vec3& outward_normal) {

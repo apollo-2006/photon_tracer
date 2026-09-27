@@ -5,6 +5,7 @@
 #include "ray.hpp"
 #include "hittable.hpp"
 #include "sphere.hpp"
+#include "material.hpp"
 #include "camera.hpp"
 
 #include <cstdint>
@@ -44,9 +45,11 @@ inline color ray_color(const ray& r, const hittable& world, int depth) {
 
     hit_record rec;
     if (world.hit(r, 0.001, 1000.0, rec)) {
-        // True Lambertian Diffuse Bounce
-        point3 target = rec.p + rec.normal + random_in_unit_sphere();
-        return ray_color(ray(rec.p, target - rec.p), world, depth - 1) * 0.5;
+        ray scattered;
+        color attenuation;
+        if (rec.mat->scatter(r, rec, attenuation, scattered))
+            return attenuation * ray_color(scattered, world, depth - 1);
+        return color(0,0,0);
     }
 
     vec3 unit_direction = r.direction().normalize();
@@ -54,11 +57,21 @@ inline color ray_color(const ray& r, const hittable& world, int depth) {
     return color(1.0, 1.0, 1.0) * (1.0 - t) + color(0.5, 0.7, 1.0) * t;
 }
 
-// The scene: a small sphere one unit in front of the camera on a huge one as ground.
+// The scene: matte, glass and metal spheres one unit in front of the camera, on
+// a huge matte sphere as ground. The glass one is hollow: a second sphere with
+// a negative radius flips its normals inward, making a thin shell.
 inline hittable_list make_scene() {
+    auto ground = std::make_shared<lambertian>(color(0.8, 0.8, 0.0));
+    auto matte  = std::make_shared<lambertian>(color(0.1, 0.2, 0.5));
+    auto glass  = std::make_shared<dielectric>(1.5);
+    auto gold   = std::make_shared<metal>(color(0.8, 0.6, 0.2), 0.1);
+
     hittable_list world;
-    world.add(std::make_shared<sphere>(point3(0, 0, -1), 0.5));
-    world.add(std::make_shared<sphere>(point3(0, -100.5, -1), 100.0));
+    world.add(std::make_shared<sphere>(point3( 0, -100.5, -1), 100.0, ground));
+    world.add(std::make_shared<sphere>(point3( 0,    0.0, -1),   0.5, matte));
+    world.add(std::make_shared<sphere>(point3(-1,    0.0, -1),   0.5, glass));
+    world.add(std::make_shared<sphere>(point3(-1,    0.0, -1),  -0.4, glass));
+    world.add(std::make_shared<sphere>(point3( 1,    0.0, -1),   0.5, gold));
     return world;
 }
 
