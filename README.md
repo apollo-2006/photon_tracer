@@ -29,6 +29,10 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
     negative radius flips its normals inward, which makes a hollow glass shell.
 
   Recursion is capped at 10 bounces so a ray trapped between surfaces terminates.
+* **BVH.** `bvh.hpp` builds a binary tree of axis-aligned bounding boxes over the scene,
+  splitting each node at the median along the longest axis. A ray only descends into
+  boxes it crosses (`aabb.hpp`, a slab test), so it tests a handful of spheres instead of
+  all of them. The right subtree is searched only for hits closer than the left's.
 * **Anti-aliasing by supersampling.** 50 rays per pixel, each jittered by a random
   sub-pixel offset, averaged. This is what removes the stair-stepping on sphere edges.
 * **Gamma correction.** Output is square-rooted before writing, an approximation of sRGB
@@ -47,6 +51,10 @@ matte blue at `(0, 0, -1)` and fuzzy gold metal at `(1, 0, -1)`, on a 100-radius
 sphere acting as the ground plane. The background is a vertical blue-to-white gradient interpolated on
 the ray direction.
 
+`--field` adds about 400 small spheres around them (random matte, metal and glass, from
+a fixed seed) and views the scene from above with a look-at camera, so the field spreads
+out instead of bunching up at the horizon. This is the scene the BVH is for.
+
 ## Build & Run
 ```bash
 # Clone the repository
@@ -58,13 +66,18 @@ make
 
 # Run the raytracer (outputs to render.ppm)
 ./photon_tracer
+./photon_tracer --field             # the 400-sphere scene
+./photon_tracer --field --no-bvh    # the same, testing every sphere per ray
+./photon_tracer --spp 10            # fewer samples per pixel
 ```
 
 Renders 1920x1080 at 50 samples per pixel. The output is a ~24 MB ASCII PPM; most image
 viewers open it directly, or convert it with `magick render.ppm render.png`.
 
-Resolution, sample count and bounce depth are constants at the top of `src/main.cpp`.
-The tracing itself (`ray_color`, the scene, and `render_row`) lives in
+The BVH is on by default for the field and off for the five-sphere scene, where the
+ground sphere's box covers nearly every ray and the tree is pure overhead; `--bvh` and
+`--no-bvh` force it either way. Resolution and bounce depth are constants at the top of `src/main.cpp`.
+The tracing itself (`ray_color`, the scenes, and `render_row`) lives in
 `include/renderer.hpp`, shared with the web build.
 
 ## Performance
@@ -89,12 +102,30 @@ In the browser demo, the same render at 100 samples per pixel across 32 Web Work
 15% of the native build's throughput here, since the inner loop is plain double-precision
 arithmetic.
 
+### BVH
+
+Same machine and settings, native build:
+
+| scene | list | BVH |
+|---|---|---|
+| materials, 5 spheres | **1.39 s**, 238M rays/s | 1.79 s, 186M rays/s |
+| field, ~400 spheres | 22.0 s, 15M rays/s | **5.2 s**, 67M rays/s |
+
+The BVH makes the field 4.3x faster. On five spheres it is slower, since the ground is a
+100-radius sphere whose box contains everything, so every ray pays for the tree walk and
+still tests nearly every sphere. The table above predates materials: glass and metal rays
+bounce further before they escape, so the materials scene traces more rays per pixel.
+
 ## Web demo
 
-`web/tracer_web.cpp` exposes `render_row()` to JavaScript and `web/build.sh` compiles it
+`web/tracer_web.cpp` exposes `render_row_linear()` and a scene/BVH switch to JavaScript and `web/build.sh` compiles it
 with Emscripten. The page runs one module instance per Web Worker and hands rows out
 from the main thread, which is the native scheduler with messages in place of an atomic
 counter; GitHub Pages cannot send the headers `SharedArrayBuffer` needs for real threads.
+Rendering is progressive by default: passes of 1, 1, 2, 4... samples per pixel, summed
+per pixel in linear color on the page and gamma corrected for display, so a noisy full
+frame appears almost at once and then refines. The page also switches between the two
+scenes and turns the BVH on and off, with the rays/s figure to compare.
 GitHub Actions builds the native renderer and the demo and publishes it to Pages on every
 push to `main`.
 
@@ -110,10 +141,10 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
   light.
 * **No light sources.** Illumination comes entirely from the sky gradient, which is why
   the scene reads as overcast.
-* **Fixed camera.** No position, orientation, field of view, or depth of field controls.
-* **No acceleration structure.** Every ray tests every object, so cost grows linearly with
-  object count per ray. Fine for two spheres, hopeless for a mesh. A BVH is the next thing
-  this needs.
+* **Scene-fixed cameras.** Each scene has a look-at camera with a field of view, but
+  there are no controls for it and no depth of field.
+* **Median-split BVH.** Built by splitting at the median, not with a surface area
+  heuristic, so the tree is balanced but its boxes are not the tightest they could be.
 * **Row granularity.** Work is claimed a whole row at a time, so one expensive row still
   runs on a single thread.
 

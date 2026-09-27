@@ -6,22 +6,43 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
-int main() {
+int main(int argc, char** argv) {
+    // Flags: --field for the 400-sphere scene, --bvh or --no-bvh to force the
+    // BVH on or off (for comparing the two), --spp N to change the sample count.
+    // By default the BVH is used for the field only: on the five-sphere scene
+    // the ground sphere's box covers nearly every ray and the tree is overhead.
+    scene_id scene = scene_id::materials;
+    int bvh_flag = -1;
+    int spp = 50;
+    for (int a = 1; a < argc; ++a) {
+        std::string arg = argv[a];
+        if (arg == "--field") scene = scene_id::field;
+        else if (arg == "--bvh") bvh_flag = 1;
+        else if (arg == "--no-bvh") bvh_flag = 0;
+        else if (arg == "--spp" && a + 1 < argc) spp = std::stoi(argv[++a]);
+        else {
+            std::cerr << "usage: " << argv[0] << " [--field] [--bvh|--no-bvh] [--spp N]\n";
+            return 2;
+        }
+    }
+    const camera cam = make_camera(scene);
+    const bool use_bvh = bvh_flag < 0 ? scene == scene_id::field : bvh_flag == 1;
+
     // 1. Image Settings
     const double aspect_ratio = 16.0 / 9.0;
     const int image_width = 1920;
     const int image_height = static_cast<int>(image_width / aspect_ratio);
-    const int samples_per_pixel = 50; // Anti-aliasing quality
+    const int samples_per_pixel = spp; // Anti-aliasing quality
     const int max_bounces = 10;
 
     // 2. Camera Abstraction
-    camera cam;
 
     // 3. World Composition
-    const hittable_list world = make_scene();
+    const std::shared_ptr<hittable> world = build_world(scene, use_bvh);
 
     // 4. Threading Setup
     std::vector<uint8_t> image(3 * image_width * image_height);
@@ -46,7 +67,7 @@ int main() {
     auto render_worker = [&]() {
         for (int j = next_row.fetch_add(1); j < image_height; j = next_row.fetch_add(1)) {
             // j counts up from the bottom; the file is written top row first.
-            render_row(world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
+            render_row(*world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
                        &image[3 * (image_height - 1 - j) * image_width]);
 
             std::lock_guard<std::mutex> lock(progress_mutex);
@@ -85,6 +106,8 @@ int main() {
     std::cerr << image_width << "x" << image_height << " at " << samples_per_pixel
               << " spp: rendered in " << render_s << " s, "
               << static_cast<long long>(total_rays / render_s / 1e6) << "M rays/s ("
-              << total_rays << " rays) on " << num_threads << " threads\n";
+              << total_rays << " rays) on " << num_threads << " threads, "
+              << (scene == scene_id::field ? "field" : "materials") << " scene, "
+              << (use_bvh ? "BVH" : "no BVH") << '\n';
     return 0;
 }

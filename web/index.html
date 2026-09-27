@@ -33,7 +33,7 @@
     <div>
       <p class="eyebrow">photon_tracer · C++17 compiled to WebAssembly</p>
       <h1>A path tracer on every core you have</h1>
-      <p class="lede">Each pixel below comes from <span class="mono">render_row()</span> in <span class="mono">include/renderer.hpp</span>,
+      <p class="lede">Each pixel below comes from <span class="mono">render_row_linear()</span> in <span class="mono">include/renderer.hpp</span>,
         the same function the native renderer calls, running in one Web Worker per thread. No graphics API: rays, spheres,
         matte, metal and glass bounces and a sky, computed on the CPU and copied into a canvas.</p>
     </div>
@@ -51,13 +51,28 @@
         <div class="stat"><b id="sTime">-</b><span>render time</span></div>
         <div class="stat"><b id="sRays">-</b><span>rays traced</span></div>
         <div class="stat"><b id="sRate">-</b><span>rays / s</span></div>
-        <div class="stat"><b id="sRows">-</b><span>rows</span></div>
+        <div class="stat"><b id="sRows">-</b><span>progress</span></div>
       </div>
     </section>
 
     <section class="panel">
       <h2>Render settings</h2>
       <div class="ctl">
+        <label for="scene">scene</label>
+        <select id="scene" style="grid-column: span 2">
+          <option value="0" selected>materials: 5 spheres</option>
+          <option value="1">field: about 400 spheres</option>
+        </select>
+        <label for="bvh">BVH</label>
+        <select id="bvh" style="grid-column: span 2">
+          <option value="1" selected>on</option>
+          <option value="0">off</option>
+        </select>
+        <label for="prog">progressive</label>
+        <select id="prog" style="grid-column: span 2">
+          <option value="1" selected>on: 1, 1, 2, 4... spp</option>
+          <option value="0">off</option>
+        </select>
         <label for="res">resolution</label>
         <select id="res" style="grid-column: span 2">
           <option value="480">480 × 270</option>

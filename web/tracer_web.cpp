@@ -1,23 +1,32 @@
 // Browser bindings. Each Web Worker loads its own instance of this module and
-// traces rows through the same render_row() the native renderer uses.
+// traces rows through the same render_row_linear() the native renderer uses.
 #include <emscripten/emscripten.h>
 
-#include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "renderer.hpp"
 
 namespace {
-const hittable_list world = make_scene();
-const camera cam;
-std::vector<uint8_t> row;
+std::shared_ptr<hittable> world = build_world(scene_id::materials, false);
+camera cam;
+std::vector<float> row;
 }
 
 extern "C" {
 
-EMSCRIPTEN_KEEPALIVE uint8_t* trace_row(int j, int width, int height, int spp, int bounces) {
+// Switch scene, and between the BVH and the plain list.
+EMSCRIPTEN_KEEPALIVE void set_scene(int scene, int use_bvh) {
+    const scene_id id = static_cast<scene_id>(scene);
+    world = build_world(id, use_bvh != 0);
+    cam = make_camera(id);
+}
+
+// Linear RGB floats, the average of spp samples; the page accumulates passes
+// and applies gamma itself.
+EMSCRIPTEN_KEEPALIVE float* trace_row(int j, int width, int height, int spp, int bounces) {
     row.resize(3 * static_cast<size_t>(width));
-    render_row(world, cam, j, width, height, spp, bounces, row.data());
+    render_row_linear(*world, cam, j, width, height, spp, bounces, row.data());
     return row.data();
 }
 

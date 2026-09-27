@@ -46,4 +46,10 @@ public:
 
         return true;
     }
+
+    aabb bounding_box() const override {
+        // abs: a negative radius (a hollow shell's inner wall) is still that big
+        vec3 r(std::fabs(radius), std::fabs(radius), std::fabs(radius));
+        return aabb(center - r, center + r);
+    }
 };

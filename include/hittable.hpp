@@ -1,5 +1,6 @@
 #pragma once
 #include "ray.hpp"
+#include "aabb.hpp"
 
 // Forward declaration
 class material;
@@ -24,4 +25,7 @@ public:
 
     // The pure virtual function every 3D object must implement
     virtual bool hit(const ray& r, double t_min, double t_max, hit_record& rec) const = 0;
+
+    // A box enclosing the whole object, for the BVH
+    virtual aabb bounding_box() const = 0;
 };
