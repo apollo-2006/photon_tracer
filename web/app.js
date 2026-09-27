@@ -130,6 +130,13 @@ function stop() {
   $('go').disabled = false; $('stop').disabled = true;
 }
 
+// Preselect controls from the query string, e.g. ?scene=2&spp=50, so a
+// particular render can be linked to.
+for (const [key, value] of new URLSearchParams(location.search)) {
+  const el = document.getElementById(key);
+  if (el && (el.tagName === 'SELECT' || el.tagName === 'INPUT')) { el.value = value; el.dispatchEvent(new Event('input')); }
+}
+
 $('go').onclick = render;
 $('stop').onclick = stop;
 render();

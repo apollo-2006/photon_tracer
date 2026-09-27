@@ -19,6 +19,12 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   directly and returns the nearer root inside the valid `t` range. The `hittable`
   interface (`hittable.hpp`) keeps the intersection test behind a virtual call, so the
   world is just a list of things that know how to be hit.
+* **Triangles and OBJ meshes.** `triangle.hpp` intersects with Moller-Trumbore, which
+  solves for the hit distance and barycentric coordinates in one step. `obj.hpp` reads
+  vertex positions and faces from Wavefront OBJ text (polygons are split into fans),
+  scales the model into place, and computes smooth vertex normals by summing the
+  area-weighted normals of the faces around each vertex, so a low-poly model shades
+  smoothly. Which side a ray hit still comes from the true face normal.
 * **Materials.** Each sphere carries a material (`material.hpp`) that decides how a
   ray scatters and how much of each color channel survives:
   * *Lambertian:* scatters toward the normal plus a random unit vector, a
@@ -53,7 +59,12 @@ the ray direction.
 
 `--field` adds about 400 small spheres around them (random matte, metal and glass, from
 a fixed seed) and views the scene from above with a look-at camera, so the field spreads
-out instead of bunching up at the horizon. This is the scene the BVH is for.
+out instead of bunching up at the horizon.
+
+`--mesh` loads the Utah teapot (`models/teapot.obj`, 6,320 triangles, from
+[common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models)) in
+polished copper between a glass and a matte sphere. `--obj PATH` puts any other OBJ model
+in its place.
 
 ## Build & Run
 ```bash
@@ -68,13 +79,16 @@ make
 ./photon_tracer
 ./photon_tracer --field             # the 400-sphere scene
 ./photon_tracer --field --no-bvh    # the same, testing every sphere per ray
+./photon_tracer --mesh              # the Utah teapot
+./photon_tracer --obj model.obj     # your own model in the teapot's place
 ./photon_tracer --spp 10            # fewer samples per pixel
+./photon_tracer --threads 8         # fewer than every hardware thread
 ```
 
 Renders 1920x1080 at 50 samples per pixel. The output is a ~24 MB ASCII PPM; most image
 viewers open it directly, or convert it with `magick render.ppm render.png`.
 
-The BVH is on by default for the field and off for the five-sphere scene, where the
+The BVH is on by default for the field and the mesh and off for the five-sphere scene, where the
 ground sphere's box covers nearly every ray and the tree is pure overhead; `--bvh` and
 `--no-bvh` force it either way. Resolution and bounce depth are constants at the top of `src/main.cpp`.
 The tracing itself (`ray_color`, the scenes, and `render_row`) lives in
@@ -110,8 +124,10 @@ Same machine and settings, native build:
 |---|---|---|
 | materials, 5 spheres | **1.39 s**, 238M rays/s | 1.79 s, 186M rays/s |
 | field, ~400 spheres | 22.0 s, 15M rays/s | **5.2 s**, 67M rays/s |
+| mesh, 6,320 triangles, 4 spp, 8 threads | 77.4 s, 0.21M rays/s | **0.67 s**, 23M rays/s |
 
-The BVH makes the field 4.3x faster. On five spheres it is slower, since the ground is a
+The BVH makes the field 4.3x faster and the teapot 115x faster: without it, every ray
+tests all 6,320 triangles. On five spheres it is slower, since the ground is a
 100-radius sphere whose box contains everything, so every ray pays for the tree walk and
 still tests nearly every sphere. The table above predates materials: glass and metal rays
 bounce further before they escape, so the materials scene traces more rays per pixel.
@@ -124,8 +140,10 @@ from the main thread, which is the native scheduler with messages in place of an
 counter; GitHub Pages cannot send the headers `SharedArrayBuffer` needs for real threads.
 Rendering is progressive by default: passes of 1, 1, 2, 4... samples per pixel, summed
 per pixel in linear color on the page and gamma corrected for display, so a noisy full
-frame appears almost at once and then refines. The page also switches between the two
-scenes and turns the BVH on and off, with the rays/s figure to compare.
+frame appears almost at once and then refines. The page also switches between the three
+scenes and turns the BVH on and off, with the rays/s figure to compare. For the teapot,
+each worker fetches `teapot.obj` and copies it into its module's memory. Any control can
+be set from the URL, so a view can be linked: `?scene=2&threads=8&spp=50`.
 GitHub Actions builds the native renderer and the demo and publishes it to Pages on every
 push to `main`.
 
@@ -136,7 +154,8 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
 
 ## Known limits
 
-* **Spheres only.** No planes, triangles, or meshes, so no model loading.
+* **Positions only from OBJ.** Texture coordinates, file normals and `.mtl` materials are
+  ignored; a whole model gets one material.
 * **No emissive materials.** Surfaces can be matte, metal or glass, but none give off
   light.
 * **No light sources.** Illumination comes entirely from the sky gradient, which is why

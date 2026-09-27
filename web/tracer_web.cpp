@@ -3,6 +3,7 @@
 #include <emscripten/emscripten.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "renderer.hpp"
@@ -11,14 +12,22 @@ namespace {
 std::shared_ptr<hittable> world = build_world(scene_id::materials, false);
 camera cam;
 std::vector<float> row;
+std::string obj_text;  // The mesh scene's model, written in by the page
 }
 
 extern "C" {
 
+// A buffer of len bytes for the page to copy an OBJ file into before it
+// switches to the mesh scene.
+EMSCRIPTEN_KEEPALIVE char* obj_buffer(int len) {
+    obj_text.assign(static_cast<size_t>(len), '\0');
+    return obj_text.data();
+}
+
 // Switch scene, and between the BVH and the plain list.
 EMSCRIPTEN_KEEPALIVE void set_scene(int scene, int use_bvh) {
     const scene_id id = static_cast<scene_id>(scene);
-    world = build_world(id, use_bvh != 0);
+    world = build_world(id, use_bvh != 0, obj_text);
     cam = make_camera(id);
 }
 

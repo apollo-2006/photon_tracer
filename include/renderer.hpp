@@ -7,11 +7,13 @@
 #include "sphere.hpp"
 #include "material.hpp"
 #include "bvh.hpp"
+#include "obj.hpp"
 #include "camera.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <random>
+#include <string>
 #include <vector>
 
 class hittable_list : public hittable {
@@ -66,7 +68,7 @@ inline color ray_color(const ray& r, const hittable& world, int depth) {
     return color(1.0, 1.0, 1.0) * (1.0 - t) + color(0.5, 0.7, 1.0) * t;
 }
 
-enum class scene_id { materials = 0, field = 1 };
+enum class scene_id { materials = 0, field = 1, mesh = 2 };
 
 // The materials scene: matte, glass and metal spheres one unit in front of the
 // camera, on a huge matte sphere as ground. The glass one is hollow: a second
@@ -112,12 +114,28 @@ inline hittable_list make_scene(scene_id id = scene_id::materials) {
 // bunching up at the horizon behind the big three.
 inline camera make_camera(scene_id id) {
     if (id == scene_id::field) return camera(point3(0, 1.0, 1.2), point3(0, -0.3, -1.2), 55.0);
+    if (id == scene_id::mesh) return camera(point3(0, 0.5, 1.2), point3(0, -0.15, -1.2), 45.0);
     return camera();
 }
 
-// The scene as something to trace: the plain list, or a BVH over it.
-inline std::shared_ptr<hittable> build_world(scene_id id, bool use_bvh) {
-    auto list = std::make_shared<hittable_list>(make_scene(id));
+// The mesh scene: a model read from OBJ text (the Utah teapot in the repo) in
+// polished copper, between a glass and a matte sphere.
+inline hittable_list make_mesh_scene(const std::string& obj_text) {
+    auto ground = std::make_shared<lambertian>(color(0.8, 0.8, 0.0));
+    auto copper = std::make_shared<metal>(color(0.95, 0.64, 0.54), 0.05);
+
+    hittable_list world;
+    world.add(std::make_shared<sphere>(point3(0, -100.5, -1), 100.0, ground));
+    world.add(std::make_shared<sphere>(point3(-1.25, -0.2, -1.4), 0.3, std::make_shared<dielectric>(1.5)));
+    world.add(std::make_shared<sphere>(point3( 1.25, -0.2, -1.4), 0.3, std::make_shared<lambertian>(color(0.1, 0.2, 0.5))));
+    for (auto& tri : load_obj(obj_text, point3(0, -0.5, -1.2), 0.75, copper)) world.add(tri);
+    return world;
+}
+
+// The scene as something to trace: the plain list, or a BVH over it. obj_text
+// is only read by the mesh scene.
+inline std::shared_ptr<hittable> build_world(scene_id id, bool use_bvh, const std::string& obj_text = "") {
+    auto list = std::make_shared<hittable_list>(id == scene_id::mesh ? make_mesh_scene(obj_text) : make_scene(id));
     if (!use_bvh) return list;
     return std::make_shared<bvh_node>(list->objects, 0, list->objects.size());
 }

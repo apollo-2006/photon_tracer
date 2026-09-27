@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -11,26 +13,45 @@
 #include <vector>
 
 int main(int argc, char** argv) {
-    // Flags: --field for the 400-sphere scene, --bvh or --no-bvh to force the
-    // BVH on or off (for comparing the two), --spp N to change the sample count.
-    // By default the BVH is used for the field only: on the five-sphere scene
+    // Flags: --field for the 400-sphere scene, --mesh for the teapot (or
+    // --obj PATH for another model in its place), --bvh or --no-bvh to force the
+    // BVH on or off (for comparing the two), --spp N to change the sample count, --threads N
+    // to use fewer than every hardware thread.
+    // By default the BVH is used for the field and the mesh: on the five-sphere scene
     // the ground sphere's box covers nearly every ray and the tree is overhead.
     scene_id scene = scene_id::materials;
     int bvh_flag = -1;
+    std::string obj_path = "models/teapot.obj";
     int spp = 50;
+    int threads_flag = 0;
     for (int a = 1; a < argc; ++a) {
         std::string arg = argv[a];
         if (arg == "--field") scene = scene_id::field;
+        else if (arg == "--mesh") scene = scene_id::mesh;
+        else if (arg == "--obj" && a + 1 < argc) { scene = scene_id::mesh; obj_path = argv[++a]; }
         else if (arg == "--bvh") bvh_flag = 1;
         else if (arg == "--no-bvh") bvh_flag = 0;
         else if (arg == "--spp" && a + 1 < argc) spp = std::stoi(argv[++a]);
+        else if (arg == "--threads" && a + 1 < argc) threads_flag = std::stoi(argv[++a]);
         else {
-            std::cerr << "usage: " << argv[0] << " [--field] [--bvh|--no-bvh] [--spp N]\n";
+            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH] [--bvh|--no-bvh] [--spp N] [--threads N]\n";
             return 2;
         }
     }
     const camera cam = make_camera(scene);
-    const bool use_bvh = bvh_flag < 0 ? scene == scene_id::field : bvh_flag == 1;
+    const bool use_bvh = bvh_flag < 0 ? scene != scene_id::materials : bvh_flag == 1;
+
+    std::string obj_text;
+    if (scene == scene_id::mesh) {
+        std::ifstream obj(obj_path);
+        if (!obj) {
+            std::cerr << "Failed to open " << obj_path << ".\n";
+            return 1;
+        }
+        std::ostringstream buf;
+        buf << obj.rdbuf();
+        obj_text = buf.str();
+    }
 
     // 1. Image Settings
     const double aspect_ratio = 16.0 / 9.0;
@@ -42,12 +63,13 @@ int main(int argc, char** argv) {
     // 2. Camera Abstraction
 
     // 3. World Composition
-    const std::shared_ptr<hittable> world = build_world(scene, use_bvh);
+    const std::shared_ptr<hittable> world = build_world(scene, use_bvh, obj_text);
 
     // 4. Threading Setup
     std::vector<uint8_t> image(3 * image_width * image_height);
     int num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;
+    if (threads_flag > 0) num_threads = threads_flag;
 
     std::vector<std::thread> threads;
 
@@ -105,9 +127,9 @@ int main(int argc, char** argv) {
     std::cerr << "Render Complete.\n";
     std::cerr << image_width << "x" << image_height << " at " << samples_per_pixel
               << " spp: rendered in " << render_s << " s, "
-              << static_cast<long long>(total_rays / render_s / 1e6) << "M rays/s ("
+              << std::setprecision(3) << total_rays / render_s / 1e6 << std::setprecision(6) << "M rays/s ("
               << total_rays << " rays) on " << num_threads << " threads, "
-              << (scene == scene_id::field ? "field" : "materials") << " scene, "
+              << (scene == scene_id::field ? "field" : scene == scene_id::mesh ? "mesh" : "materials") << " scene, "
               << (use_bvh ? "BVH" : "no BVH") << '\n';
     return 0;
 }

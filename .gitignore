@@ -59,3 +59,4 @@ dkms.conf
 render.ppm
 obj/
 web/dist/
+!models/*.obj

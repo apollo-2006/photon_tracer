@@ -69,6 +69,12 @@ inline vec3 operator*(double t, const vec3& v) {
     return vec3(t * v.e[0], t * v.e[1], t * v.e[2]);
 }
 
+inline vec3 cross(const vec3& a, const vec3& b) {
+    return vec3(a.y() * b.z() - a.z() * b.y(),
+                a.z() * b.x() - a.x() * b.z(),
+                a.x() * b.y() - a.y() * b.x());
+}
+
 // Utility to generate a random point inside a 3D sphere for diffuse lighting
 inline vec3 random_in_unit_sphere() {
     while (true) {
