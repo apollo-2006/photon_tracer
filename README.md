@@ -136,9 +136,9 @@ camera.
 `--crowd` is a grid of 20 x 20 instanced teapots, 2.5 million triangles, each turned,
 sized and colored at random, on a wide ground; `--crowd N` makes it N x N, `--obj PATH`
 makes it of another model, and `--flatten` writes every copy's triangles out into one
-tree instead of instancing, for comparison. `models/fetch.sh` downloads the Stanford bunny
-(69,451 triangles), which is not redistributed here: `--crowd 40 --obj
-models/stanford-bunny.obj` is 1,600 bunnies, 111 million triangles in 95 MB, built in
+tree instead of instancing, for comparison. `models/stanford-bunny.obj` is the Stanford
+bunny (69,451 triangles, courtesy of the Stanford Computer Graphics Laboratory; see
+`models/README.md`): `--crowd 40 --obj models/stanford-bunny.obj` is 1,600 bunnies, 111 million triangles in 95 MB, built in
 0.09 s and rendered at 960x540 and 32 spp in half a second.
 
 `--room` is a closed box, red on the left and green on the right, lit only by a small
@@ -162,7 +162,7 @@ make
 ./photon_tracer --mesh              # the Utah teapot
 ./photon_tracer --room              # a closed room lit by one small lamp
 ./photon_tracer --crowd             # 400 instanced teapots; --crowd N for N x N, --flatten to compare
-models/fetch.sh && ./photon_tracer --crowd 40 --obj models/stanford-bunny.obj  # 1,600 bunnies
+./photon_tracer --crowd 40 --obj models/stanford-bunny.obj  # 1,600 Stanford bunnies
 ./photon_tracer --room --no-nee     # the same without sampling the lamp directly
 ./photon_tracer --obj model.obj     # your own model in the teapot's place, with its .mtl materials
 ./photon_tracer --obj models/spot/spot.obj --turn 150  # a textured cow, turned to face the camera
@@ -366,7 +366,9 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The models in `models/` keep their own terms, listed in
+[models/README.md](models/README.md): the Stanford bunny is courtesy of the Stanford
+Computer Graphics Laboratory and not for commercial use without their permission.
 
 ## Author
 

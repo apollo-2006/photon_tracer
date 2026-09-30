@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Downloads larger test models into models/, from Alec Jacobson's
 # common-3d-test-models (https://github.com/alecjacobson/common-3d-test-models).
-# They are not in this repository: the Stanford scans are free to use with
-# acknowledgement but not to redistribute under this project's MIT license.
+# The Stanford bunny is already in this repository; these are kept out for
+# their size.
 #
-#   models/fetch.sh             # the Stanford bunny (69,451 triangles, 2.4 MB)
-#   models/fetch.sh armadillo   # others by name, e.g. armadillo, happy, xyzrgb_dragon
+#   models/fetch.sh armadillo            # by name: armadillo, happy, xyzrgb_dragon
+#   models/fetch.sh armadillo happy
 #
 # The Stanford Bunny, Armadillo, Happy Buddha and Dragon are from the Stanford
-# 3D Scanning Repository, http://graphics.stanford.edu/data/3Dscanrep/.
+# 3D Scanning Repository, http://graphics.stanford.edu/data/3Dscanrep/, which
+# asks for credit to the Stanford Computer Graphics Laboratory and allows no
+# commercial use without permission.
 set -euo pipefail
 cd "$(dirname "$0")"
 names=("$@")
-[[ ${#names[@]} -eq 0 ]] && names=(stanford-bunny)
+if [[ ${#names[@]} -eq 0 ]]; then echo "usage: models/fetch.sh NAME... (armadillo, happy, xyzrgb_dragon)"; exit 2; fi
 for name in "${names[@]}"; do
   if [[ -f $name.obj ]]; then echo "models/$name.obj is already here"; continue; fi
   echo "fetching models/$name.obj"
