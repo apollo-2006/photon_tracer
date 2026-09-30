@@ -3,30 +3,31 @@
 #include "ray.hpp"
 
 #include <algorithm>
+#include <limits>
 
 struct aabb {
     point3 min, max;
 
-    aabb() {}
+    // Empty: grows to exactly the first thing added to it.
+    aabb() : min(point3(inf(), inf(), inf())), max(point3(-inf(), -inf(), -inf())) {}
     aabb(const point3& a, const point3& b) : min(a), max(b) {}
 
-    // Slab test: clip [t_min, t_max] against the ray's entry and exit on each
-    // axis. An empty interval on any axis means a miss.
-    bool hit(const ray& r, double t_min, double t_max) const {
+    void grow(const aabb& b) {
         for (int a = 0; a < 3; ++a) {
-            double inv_d = 1.0 / r.direction().e[a];
-            double t0 = (min.e[a] - r.origin().e[a]) * inv_d;
-            double t1 = (max.e[a] - r.origin().e[a]) * inv_d;
-            if (inv_d < 0.0) std::swap(t0, t1);
-            t_min = t0 > t_min ? t0 : t_min;
-            t_max = t1 < t_max ? t1 : t_max;
-            if (t_max <= t_min) return false;
+            min.e[a] = std::min(min.e[a], b.min.e[a]);
+            max.e[a] = std::max(max.e[a], b.max.e[a]);
         }
-        return true;
     }
 
-    static aabb surrounding(const aabb& a, const aabb& b) {
-        return aabb(point3(std::min(a.min.x(), b.min.x()), std::min(a.min.y(), b.min.y()), std::min(a.min.z(), b.min.z())),
-                    point3(std::max(a.max.x(), b.max.x()), std::max(a.max.y(), b.max.y()), std::max(a.max.z(), b.max.z())));
+    point3 center() const { return (min + max) * real(0.5); }
+
+    // Half the surface area, which is all the SAH needs: the chance that a ray
+    // through the parent also passes through this box is the ratio of the two.
+    real half_area() const {
+        if (min.x() > max.x()) return 0;  // Empty
+        vec3 d = max - min;
+        return d.x() * d.y() + d.y() * d.z() + d.z() * d.x();
     }
+
+    static real inf() { return std::numeric_limits<real>::infinity(); }
 };

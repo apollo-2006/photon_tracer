@@ -13,7 +13,7 @@ public:
     vec3 direction() const { return dir; }
 
     // Calculates exactly where the photon is at distance 't'
-    point3 at(double t) const {
+    point3 at(real t) const {
         return orig + (dir * t);
     }
 };

@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
     // 2. Camera Abstraction
 
     // 3. World Composition
-    const std::shared_ptr<hittable> world = build_world(scene, use_bvh, obj_text);
+    const geometry world = build_world(scene, use_bvh, obj_text);
 
     // 4. Threading Setup
     std::vector<uint8_t> image(3 * image_width * image_height);
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     auto render_worker = [&]() {
         for (int j = next_row.fetch_add(1); j < image_height; j = next_row.fetch_add(1)) {
             // j counts up from the bottom; the file is written top row first.
-            render_row(*world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
+            render_row(world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
                        &image[3 * (image_height - 1 - j) * image_width]);
 
             std::lock_guard<std::mutex> lock(progress_mutex);

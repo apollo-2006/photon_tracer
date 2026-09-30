@@ -6,15 +6,13 @@
 #include "triangle.hpp"
 
 #include <array>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
 // Triangles from OBJ text, scaled to height and set down with the bottom of
 // their bounding box centered on base. Polygons are split into fans.
-inline std::vector<std::shared_ptr<hittable>> load_obj(const std::string& text, point3 base, double height,
-                                                      std::shared_ptr<material> mat) {
+inline std::vector<triangle> load_obj(const std::string& text, point3 base, double height, const material* mat) {
     std::vector<point3> verts;
     std::vector<std::array<int, 3>> faces;
     std::istringstream in(text);
@@ -57,13 +55,12 @@ inline std::vector<std::shared_ptr<hittable>> load_obj(const std::string& text, 
         for (int i : f) normals[i] = normals[i] + n;
     }
 
-    std::vector<std::shared_ptr<hittable>> tris;
+    std::vector<triangle> tris;
     tris.reserve(faces.size());
     for (const auto& f : faces) {
         const point3 &a = verts[f[0]], &b = verts[f[1]], &c = verts[f[2]];
         if (vec3::dot(cross(b - a, c - a), cross(b - a, c - a)) < 1e-24) continue;  // Degenerate
-        tris.push_back(std::make_shared<triangle>(a, b, c, normals[f[0]].normalize(), normals[f[1]].normalize(),
-                                                  normals[f[2]].normalize(), mat));
+        tris.emplace_back(a, b, c, normals[f[0]].normalize(), normals[f[1]].normalize(), normals[f[2]].normalize(), mat);
     }
     return tris;
 }

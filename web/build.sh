@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 rm -rf dist && mkdir -p dist
-em++ -std=c++17 -O3 -Wall -Wextra -I../include tracer_web.cpp \
+# -msimd128 and -flto: about 10-20% more rays/s between them (single-threaded, Node).
+em++ -std=c++17 -O3 -msimd128 -flto -Wall -Wextra -I../include tracer_web.cpp \
   -sMODULARIZE=1 -sEXPORT_NAME=PhotonTracer -sENVIRONMENT=worker \
   -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8 -sALLOW_MEMORY_GROWTH=1 \
   -o dist/photon_tracer.js

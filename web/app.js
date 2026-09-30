@@ -45,7 +45,17 @@ function render() {
   canvas.width = width; canvas.height = height;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#05080d'; ctx.fillRect(0, 0, width, height);
-  const image = ctx.createImageData(width, 1);
+  // The whole frame, painted to the canvas at most once per animation frame
+  // and only across the rows that changed; one putImageData per row cost the
+  // main thread about a second of a 3 s render.
+  const image = ctx.createImageData(width, height);
+  let dirtyTop = height, dirtyBottom = -1, drawQueued = false;
+  const draw = () => {
+    drawQueued = false;
+    if (dirtyBottom < dirtyTop) return;
+    ctx.putImageData(image, 0, 0, 0, dirtyTop, width, dirtyBottom - dirtyTop + 1);
+    dirtyTop = height; dirtyBottom = -1;
+  };
 
   // Linear color summed over every sample so far, and the sample count, per row.
   const sum = new Float32Array(3 * width * height), count = new Uint16Array(height);
@@ -78,24 +88,31 @@ function render() {
     const current = job;
     worker.onmessage = ({ data }) => {
       if (!current.live) return;
-      const base = 3 * width * data.j;
+      // Hand out the next row before doing this one's bookkeeping.
+      send(worker, nextFor(w));
+      const base = 3 * width * data.j, y = height - 1 - data.j, out = 4 * width * y;
       count[data.j] += data.spp;
       const scale = 1 / count[data.j];
       for (let i = 0; i < width; i++) {
         for (let c = 0; c < 3; c++) {
           sum[base + 3 * i + c] += data.pixels[3 * i + c] * data.spp;
           // Gamma 2.0, as in render_row().
-          image.data[4 * i + c] = 256 * Math.min(Math.sqrt(sum[base + 3 * i + c] * scale), 0.999);
+          image.data[out + 4 * i + c] = 256 * Math.min(Math.sqrt(sum[base + 3 * i + c] * scale), 0.999);
         }
-        image.data[4 * i + 3] = 255;
+        image.data[out + 4 * i + 3] = 255;
       }
-      ctx.putImageData(image, 0, height - 1 - data.j);
+      dirtyTop = Math.min(dirtyTop, y); dirtyBottom = Math.max(dirtyBottom, y);
       current.done++; current.rays += data.rays; current.perWorker[w]++;
-      send(worker, nextFor(w));
-      update(current);
-      if (current.done === current.total) finish(current);
+      if (current.done === current.total) { draw(); finish(current); return; }
+      if (!drawQueued) {
+        drawQueued = true;
+        requestAnimationFrame(() => { if (current.live) { draw(); update(current); } });
+      }
     };
-    send(worker, nextFor(w));
+    // Two rows in flight per worker, so each has its next row queued when it
+    // finishes one instead of waiting a round trip through this thread. With
+    // one, workers sat idle for most of the short 1-sample progressive passes.
+    for (let k = 0; k < 2; k++) send(worker, nextFor(w));
   });
   $('go').disabled = true; $('stop').disabled = false;
   $('schedNote').textContent = bands ? `each worker owns ${rowsPerBand} consecutive rows` : 'workers take whichever row is next';
@@ -130,12 +147,20 @@ function stop() {
   $('go').disabled = false; $('stop').disabled = true;
 }
 
+// The BVH defaults to on for the field and the teapot and off for the
+// five-sphere scene, as in the native renderer: four small spheres are
+// cheaper to test than a tree is to walk. Picking a scene resets it.
+const bvhForScene = () => { $('bvh').value = $('scene').value === '0' ? '0' : '1'; };
+$('scene').addEventListener('change', bvhForScene);
+
 // Preselect controls from the query string, e.g. ?scene=2&spp=50, so a
 // particular render can be linked to.
-for (const [key, value] of new URLSearchParams(location.search)) {
+const params = new URLSearchParams(location.search);
+for (const [key, value] of params) {
   const el = document.getElementById(key);
   if (el && (el.tagName === 'SELECT' || el.tagName === 'INPUT')) { el.value = value; el.dispatchEvent(new Event('input')); }
 }
+if (!params.has('bvh')) bvhForScene();
 
 $('go').onclick = render;
 $('stop').onclick = stop;

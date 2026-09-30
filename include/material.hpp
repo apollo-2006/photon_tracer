@@ -14,14 +14,14 @@ public:
 };
 
 inline vec3 reflect(const vec3& v, const vec3& n) {
-    return v - n * (2.0 * vec3::dot(v, n));
+    return v - n * (2 * vec3::dot(v, n));
 }
 
 // Snell's law for a unit incoming direction; ratio is eta_in / eta_out.
-inline vec3 refract(const vec3& uv, const vec3& n, double ratio) {
-    double cos_theta = std::fmin(vec3::dot(-uv, n), 1.0);
+inline vec3 refract(const vec3& uv, const vec3& n, real ratio) {
+    real cos_theta = std::fmin(vec3::dot(-uv, n), real(1));
     vec3 r_perp = (uv + n * cos_theta) * ratio;
-    vec3 r_parallel = n * -std::sqrt(std::fabs(1.0 - vec3::dot(r_perp, r_perp)));
+    vec3 r_parallel = n * -std::sqrt(std::fabs(1 - vec3::dot(r_perp, r_perp)));
     return r_perp + r_parallel;
 }
 
@@ -36,7 +36,7 @@ public:
     bool scatter(const ray&, const hit_record& rec, color& attenuation, ray& scattered) const override {
         vec3 direction = rec.normal + random_in_unit_sphere().normalize();
         // The random vector can cancel the normal almost exactly.
-        if (vec3::dot(direction, direction) < 1e-16) direction = rec.normal;
+        if (vec3::dot(direction, direction) < real(1e-16)) direction = rec.normal;
         scattered = ray(rec.p, direction);
         attenuation = albedo;
         return true;
@@ -47,9 +47,9 @@ public:
 class metal : public material {
 public:
     color albedo;
-    double fuzz;
+    real fuzz;
 
-    metal(const color& a, double f) : albedo(a), fuzz(f < 1 ? f : 1) {}
+    metal(const color& a, real f) : albedo(a), fuzz(f < 1 ? f : 1) {}
 
     bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered) const override {
         vec3 reflected = reflect(r_in.direction().normalize(), rec.normal);
@@ -65,20 +65,20 @@ public:
 // approximation of the Fresnel reflectance.
 class dielectric : public material {
 public:
-    double ior;  // Index of refraction: 1.5 for glass, 1.33 for water
+    real ior;  // Index of refraction: 1.5 for glass, 1.33 for water
 
-    explicit dielectric(double index) : ior(index) {}
+    explicit dielectric(real index) : ior(index) {}
 
     bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered) const override {
-        attenuation = color(1.0, 1.0, 1.0);
-        double ratio = rec.front_face ? (1.0 / ior) : ior;
+        attenuation = color(1, 1, 1);
+        real ratio = rec.front_face ? (1 / ior) : ior;
 
         vec3 unit_direction = r_in.direction().normalize();
-        double cos_theta = std::fmin(vec3::dot(-unit_direction, rec.normal), 1.0);
-        double sin_theta = std::sqrt(1.0 - cos_theta * cos_theta);
+        real cos_theta = std::fmin(vec3::dot(-unit_direction, rec.normal), real(1));
+        real sin_theta = std::sqrt(1 - cos_theta * cos_theta);
 
-        bool cannot_refract = ratio * sin_theta > 1.0;
-        vec3 direction = (cannot_refract || schlick(cos_theta, ratio) > random_double())
+        bool cannot_refract = ratio * sin_theta > 1;
+        vec3 direction = (cannot_refract || schlick(cos_theta, ratio) > random_real())
                              ? reflect(unit_direction, rec.normal)
                              : refract(unit_direction, rec.normal, ratio);
 
@@ -87,9 +87,10 @@ public:
     }
 
 private:
-    static double schlick(double cosine, double ratio) {
-        double r0 = (1 - ratio) / (1 + ratio);
+    static real schlick(real cosine, real ratio) {
+        real r0 = (1 - ratio) / (1 + ratio);
         r0 = r0 * r0;
-        return r0 + (1 - r0) * std::pow(1 - cosine, 5);
+        real x = 1 - cosine, x2 = x * x;
+        return r0 + (1 - r0) * x2 * x2 * x;
     }
 };

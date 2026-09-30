@@ -34,7 +34,7 @@ public:
     }
 
     // Casts a mathematical ray from the origin through a specific UV coordinate on the screen
-    ray get_ray(double u, double v) const {
+    ray get_ray(real u, real v) const {
         return ray(origin, lower_left_corner + (horizontal * u) + (vertical * v) - origin);
     }
 };

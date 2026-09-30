@@ -5,8 +5,13 @@ importScripts('photon_tracer.js');
 let tracer, sceneKey = '', objLoaded = false;
 const ready = PhotonTracer().then((m) => { tracer = m; });
 
-onmessage = async ({ data }) => {
-  await ready;
+// The page keeps two rows in flight, so a second message can arrive while the
+// first is still awaiting the module or the teapot. Chaining handles them in
+// order, so the scene is only ever set up once.
+let queue = ready;
+onmessage = ({ data }) => { queue = queue.then(() => trace(data)); };
+
+async function trace(data) {
   const { j, width, height, spp, bounces, scene, bvh } = data;
   const key = scene + '/' + bvh;
   if (key !== sceneKey) {
@@ -24,4 +29,4 @@ onmessage = async ({ data }) => {
   const ptr = tracer._trace_row(j, width, height, spp, bounces) >> 2;
   const pixels = tracer.HEAPF32.slice(ptr, ptr + width * 3);
   postMessage({ j, spp, pixels, rays: tracer._take_rays(), ms: performance.now() - t0 }, [pixels.buffer]);
-};
+}

@@ -2,14 +2,13 @@
 // traces rows through the same render_row_linear() the native renderer uses.
 #include <emscripten/emscripten.h>
 
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "renderer.hpp"
 
 namespace {
-std::shared_ptr<hittable> world = build_world(scene_id::materials, false);
+geometry world = build_world(scene_id::materials, false);
 camera cam;
 std::vector<float> row;
 std::string obj_text;  // The mesh scene's model, written in by the page
@@ -35,7 +34,7 @@ EMSCRIPTEN_KEEPALIVE void set_scene(int scene, int use_bvh) {
 // and applies gamma itself.
 EMSCRIPTEN_KEEPALIVE float* trace_row(int j, int width, int height, int spp, int bounces) {
     row.resize(3 * static_cast<size_t>(width));
-    render_row_linear(*world, cam, j, width, height, spp, bounces, row.data());
+    render_row_linear(world, cam, j, width, height, spp, bounces, row.data());
     return row.data();
 }
 

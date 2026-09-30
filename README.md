@@ -16,9 +16,10 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   renderer casts a ray out through the viewport and asks the world what it hit, which is
   why shadows and bounced light fall out of the algorithm instead of being added on top.
 * **Analytic sphere intersection.** `sphere.hpp` solves the ray-sphere quadratic
-  directly and returns the nearer root inside the valid `t` range. The `hittable`
-  interface (`hittable.hpp`) keeps the intersection test behind a virtual call, so the
-  world is just a list of things that know how to be hit.
+  directly and returns the nearer root inside the valid `t` range. Spheres and triangles
+  are plain structs kept in one flat array per type (`geometry.hpp`), not objects behind
+  a virtual call, and finding the hit is split from shading it: the point and normal are
+  only worked out once, for the nearest hit.
 * **Triangles and OBJ meshes.** `triangle.hpp` intersects with Moller-Trumbore, which
   solves for the hit distance and barycentric coordinates in one step. `obj.hpp` reads
   vertex positions and faces from Wavefront OBJ text (polygons are split into fans),
@@ -34,11 +35,23 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
     and otherwise chooses between the two with Schlick's approximation. A sphere with a
     negative radius flips its normals inward, which makes a hollow glass shell.
 
-  Recursion is capped at 10 bounces so a ray trapped between surfaces terminates.
-* **BVH.** `bvh.hpp` builds a binary tree of axis-aligned bounding boxes over the scene,
-  splitting each node at the median along the longest axis. A ray only descends into
-  boxes it crosses (`aabb.hpp`, a slab test), so it tests a handful of spheres instead of
-  all of them. The right subtree is searched only for hits closer than the left's.
+  A path is capped at 10 bounces so a ray trapped between surfaces terminates. From the
+  third bounce on, Russian roulette ends paths that can only carry a little light: a path
+  continues with probability equal to its brightest remaining channel, and survivors are
+  scaled up to match, so the image is the same on average with about 13% fewer rays.
+* **BVH.** `bvh.hpp` builds a binary tree of axis-aligned bounding boxes over the scene
+  with the surface area heuristic: centroids are sorted into 16 bins per axis and each
+  node splits where the expected cost of tracing through its two halves is lowest. That
+  binary tree is then collapsed into a 4-wide one, whose nodes keep their four child boxes
+  axis by axis, so one SIMD slab test (`simd4.hpp`: SSE natively, SIMD128 in
+  WebAssembly) checks all four at once. A ray walks the flat node array with a small
+  stack, nearest child first, skipping any box farther than the nearest hit so far. The
+  ground sphere stays outside the tree: its box contains the whole scene, so every ray
+  would enter it anyway and it would widen every box above it.
+* **Single precision.** Geometry and color are `float` (`real` in `vec3.hpp`), except
+  the ground sphere's intersection, which is `double`: in `float`, `|oc|^2 - r^2` for a
+  sphere of radius 100 loses the few thousandths that separate a bounce from the surface
+  it left, and the ground came out slightly darker.
 * **Anti-aliasing by supersampling.** 50 rays per pixel, each jittered by a random
   sub-pixel offset, averaged. This is what removes the stair-stepping on sphere edges.
 * **Gamma correction.** Output is square-rooted before writing, an approximation of sRGB
@@ -46,8 +59,8 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
 * **Multithreaded.** One worker per hardware thread, each claiming the next unrendered row
   from a shared atomic counter. Rows are not split into fixed bands up front, because the
   top of the frame is sky (one miss per sample) and the bottom is ground (several
-  bounces), so fixed bands leave the sky threads idle. The RNG and the ray counter are
-  `thread_local`, so workers never contend on them.
+  bounces), so fixed bands leave the sky threads idle. The RNG (xoshiro256+) and the ray
+  counter are `thread_local`, so workers never contend on them.
 * **PPM output.** Written as plain ASCII P3 with no image library involved.
 
 ## Scene
@@ -88,8 +101,8 @@ make
 Renders 1920x1080 at 50 samples per pixel. The output is a ~24 MB ASCII PPM; most image
 viewers open it directly, or convert it with `magick render.ppm render.png`.
 
-The BVH is on by default for the field and the mesh and off for the five-sphere scene, where the
-ground sphere's box covers nearly every ray and the tree is pure overhead; `--bvh` and
+The BVH is on by default for the field and the mesh and off for the five-sphere scene, where
+four small spheres are cheaper to test than a tree is to walk; `--bvh` and
 `--no-bvh` force it either way. Resolution and bounce depth are constants at the top of `src/main.cpp`.
 The tracing itself (`ray_color`, the scenes, and `render_row`) lives in
 `include/renderer.hpp`, shared with the web build.
@@ -111,10 +124,8 @@ Handing out rows from a shared counter instead of fixed bands took the whole run
 (13.3 s to 15.9 s) because threads that used to finish their band of sky and exit now
 keep working, which is the point: parallel speedup went from about 14x to 24x.
 
-In the browser demo, the same render at 100 samples per pixel across 32 Web Workers takes
-1.15 s at about 320M rays/s, and 1.73 s with fixed bands. WebAssembly gets within about
-15% of the native build's throughput here, since the inner loop is plain double-precision
-arithmetic.
+The browser figures that were here (1.15 s at 100 samples per pixel) are replaced by
+the ones under *Flat BVH, float and a faster RNG* below.
 
 ### BVH
 
@@ -130,7 +141,65 @@ The BVH makes the field 4.3x faster and the teapot 115x faster: without it, ever
 tests all 6,320 triangles. On five spheres it is slower, since the ground is a
 100-radius sphere whose box contains everything, so every ray pays for the tree walk and
 still tests nearly every sphere. The table above predates materials: glass and metal rays
-bounce further before they escape, so the materials scene traces more rays per pixel.
+bounce further before they escape, so the materials scene traces more rays per pixel. It
+also predates the SAH BVH and moving the ground out of the tree, below.
+
+### Faster tracing
+
+Same machine, 1920x1080, 50 samples per pixel (4 for the teapot), 32 threads, up to 10
+bounces, best of three, measured on the same day. "Before" is the renderer with the
+pointer-based median-split BVH, `double` and `mt19937`. The first round replaced those
+with a flat SAH BVH, `float` and xoshiro256+; the second added the 4-wide SIMD BVH,
+Russian roulette and an inlined RNG.
+
+| native | before | first round | second round | |
+|---|---|---|---|---|
+| materials, list | 1.46 s | 0.90 s | **0.68 s** | 2.1x |
+| materials, BVH | 1.86 s | 1.15 s | 0.91 s | 2.0x |
+| field, BVH | 4.77 s | 1.42 s | **0.96 s** | 5.0x |
+| teapot, BVH | 0.30 s | 0.080 s | **0.063 s** | 4.8x |
+
+Where it came from, one change at a time:
+
+* **RNG.** `mt19937` through `uniform_real_distribution` was about 9% of a profile;
+  xoshiro256+ took the materials scene from 1.46 s to 1.09 s. Declaring its per-thread
+  state so that `random_real()` inlines, without a check that the thread's copy was
+  constructed on every call, took it from 0.90 s to 0.77 s.
+* **Flat SAH BVH, ground outside it.** Walking the tree was 74% of the field's profile.
+  The field went from 4.40 s to 1.44 s and the teapot from 0.28 s to 0.078 s.
+* **`float`.** 5-10% natively, more in WebAssembly.
+* **4-wide SIMD BVH.** Together with the RNG change, the field went from 1.42 s to
+  1.15 s. In WebAssembly (single-threaded, Node) it took the field from 0.47 s to 0.30 s
+  and the teapot from 0.128 s to 0.094 s.
+* **Russian roulette** from the third bounce: 13% fewer rays, and 6-17% less time (least on the teapot, whose copper reflects most of the light and keeps paths bright).
+  Starting at the second bounce saved only 5% more and visibly added noise.
+
+Renders match the old ones to within the noise between two runs of the old one, per pixel
+and in mean brightness.
+
+In the browser demo, Chrome, 32 Web Workers, same settings, progressive:
+
+| browser | before | first round | second round | |
+|---|---|---|---|---|
+| materials, list | 3.07 s | 1.09 s | **1.07 s** | 2.9x |
+| materials, BVH | 3.69 s | 1.33 s | 1.24 s | 3.0x |
+| field, BVH | 6.65 s | 1.88 s | **1.34 s** | 5.0x |
+| teapot, BVH | 5.57 s | 1.34 s | **1.09 s** | 5.1x |
+
+Much of the first round's browser gain came from the page, not the tracing: with one row
+in flight per worker, workers sat idle for 78% of a progressive render waiting for the
+main thread to send the next row, and the main thread spent about a second drawing each
+returned row to the canvas separately. The page now keeps two rows in flight per worker
+and draws once per animation frame. The "before" and first-round columns were measured
+with the window in the background, where the browser skips animation frames (the old
+page drew every row regardless); the second round was measured in front, drawing
+included. With progressive rendering off, workers are now busy 91% of the materials
+render, so the browser is limited by WebAssembly's tracing speed rather than the page.
+`-msimd128 -flto` in `web/build.sh` are worth 10-20%, and SIMD128 is what the 4-wide
+BVH's box test runs on.
+
+The page now also turns the BVH off by default for the five-sphere scene, as the native
+renderer does, which makes the first render a visitor sees 1.07 s instead of 1.24 s.
 
 ## Web demo
 
@@ -140,7 +209,9 @@ from the main thread, which is the native scheduler with messages in place of an
 counter; GitHub Pages cannot send the headers `SharedArrayBuffer` needs for real threads.
 Rendering is progressive by default: passes of 1, 1, 2, 4... samples per pixel, summed
 per pixel in linear color on the page and gamma corrected for display, so a noisy full
-frame appears almost at once and then refines. The page also switches between the three
+frame appears almost at once and then refines. Each worker has two rows in flight, so
+it never waits on the page for its next one, and the canvas is drawn once per animation
+frame rather than once per row. The page also switches between the three
 scenes and turns the BVH on and off, with the rays/s figure to compare. For the teapot,
 each worker fetches `teapot.obj` and copies it into its module's memory. Any control can
 be set from the URL, so a view can be linked: `?scene=2&threads=8&spp=50`.
@@ -162,8 +233,6 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
   the scene reads as overcast.
 * **Scene-fixed cameras.** Each scene has a look-at camera with a field of view, but
   there are no controls for it and no depth of field.
-* **Median-split BVH.** Built by splitting at the median, not with a surface area
-  heuristic, so the tree is balanced but its boxes are not the tightest they could be.
 * **Row granularity.** Work is claimed a whole row at a time, so one expensive row still
   runs on a single thread.
 

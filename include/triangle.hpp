@@ -1,66 +1,74 @@
 #pragma once
 // A triangle with optional per-vertex normals, the building block of meshes.
+#include "aabb.hpp"
 #include "hittable.hpp"
 #include "vec3.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <memory>
 
 class material;
 
-class triangle : public hittable {
+class triangle {
 public:
+    // What intersect() reads comes first, so it shares a cache line.
     point3 p0;
     vec3 e1, e2;        // Edges p1 - p0 and p2 - p0
     vec3 n0, n1, n2;    // Vertex normals, interpolated across the face
     vec3 face_normal;
-    std::shared_ptr<material> mat;
+    const material* mat;
 
     // Flat shaded: every vertex normal is the face normal.
-    triangle(point3 a, point3 b, point3 c, std::shared_ptr<material> m)
-        : triangle(a, b, c, vec3(), vec3(), vec3(), std::move(m)) {
+    triangle(point3 a, point3 b, point3 c, const material* m)
+        : triangle(a, b, c, vec3(), vec3(), vec3(), m) {
         n0 = n1 = n2 = face_normal;
     }
 
-    triangle(point3 a, point3 b, point3 c, vec3 na, vec3 nb, vec3 nc, std::shared_ptr<material> m)
-        : p0(a), e1(b - a), e2(c - a), n0(na), n1(nb), n2(nc), mat(std::move(m)) {
+    triangle(point3 a, point3 b, point3 c, vec3 na, vec3 nb, vec3 nc, const material* m)
+        : p0(a), e1(b - a), e2(c - a), n0(na), n1(nb), n2(nc), mat(m) {
         face_normal = cross(e1, e2).normalize();
     }
 
     // Moller-Trumbore: solve origin + t*dir = p0 + u*e1 + v*e2 directly for
-    // t and the barycentric u, v, without first intersecting the plane.
-    bool hit(const ray& r, double t_min, double t_max, hit_record& rec) const override {
+    // t and the barycentric u, v, without first intersecting the plane. On a
+    // hit inside (t_min, t_max), moves t_max to it and keeps u and v for fill().
+    bool intersect(const ray& r, real t_min, real& t_max, real& u_out, real& v_out) const {
         vec3 pvec = cross(r.direction(), e2);
-        double det = vec3::dot(e1, pvec);
-        if (std::fabs(det) < 1e-12) return false;  // Ray parallel to the face
-        double inv_det = 1.0 / det;
+        real det = vec3::dot(e1, pvec);
+        if (std::fabs(det) < real(1e-12)) return false;  // Ray parallel to the face
+        real inv_det = 1 / det;
 
         vec3 tvec = r.origin() - p0;
-        double u = vec3::dot(tvec, pvec) * inv_det;
-        if (u < 0.0 || u > 1.0) return false;
+        real u = vec3::dot(tvec, pvec) * inv_det;
+        if (u < 0 || u > 1) return false;
 
         vec3 qvec = cross(tvec, e1);
-        double v = vec3::dot(r.direction(), qvec) * inv_det;
-        if (v < 0.0 || u + v > 1.0) return false;
+        real v = vec3::dot(r.direction(), qvec) * inv_det;
+        if (v < 0 || u + v > 1) return false;
 
-        double t = vec3::dot(e2, qvec) * inv_det;
+        real t = vec3::dot(e2, qvec) * inv_det;
         if (t < t_min || t > t_max) return false;
 
+        t_max = t;
+        u_out = u;
+        v_out = v;
+        return true;
+    }
+
+    void fill(const ray& r, real t, real u, real v, hit_record& rec) const {
         rec.t = t;
         rec.p = r.at(t);
         // Which side was hit comes from the true face, so a smoothed normal
         // near a silhouette cannot flip it; shading uses the smooth normal.
         rec.front_face = vec3::dot(r.direction(), face_normal) < 0;
-        vec3 n = (n0 * (1.0 - u - v) + n1 * u + n2 * v).normalize();
+        vec3 n = (n0 * (1 - u - v) + n1 * u + n2 * v).normalize();
         rec.normal = rec.front_face ? n : -n;
-        rec.mat = mat.get();
-        return true;
+        rec.mat = mat;
     }
 
-    aabb bounding_box() const override {
+    aabb bounding_box() const {
         point3 p1 = p0 + e1, p2 = p0 + e2;
-        const double pad = 1e-4;  // A flat, axis-aligned face would have a zero-width box
+        const real pad = real(1e-4);  // A flat, axis-aligned face would have a zero-width box
         point3 lo(std::min({p0.x(), p1.x(), p2.x()}) - pad, std::min({p0.y(), p1.y(), p2.y()}) - pad,
                   std::min({p0.z(), p1.z(), p2.z()}) - pad);
         point3 hi(std::max({p0.x(), p1.x(), p2.x()}) + pad, std::max({p0.y(), p1.y(), p2.y()}) + pad,
