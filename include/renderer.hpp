@@ -179,16 +179,9 @@ inline void render_row_linear(const geometry& world, const camera& cam, int j, i
     }
 }
 
-// The same scanline as width RGB bytes: gamma 2.0, then quantized.
-inline void render_row(const geometry& world, const camera& cam, int j, int width, int height,
-                       int samples_per_pixel, int max_bounces, uint8_t* out, uint64_t seed) {
-    thread_local std::vector<float> linear;
-    linear.resize(3 * static_cast<size_t>(width));
-    render_row_linear(world, cam, j, width, height, samples_per_pixel, max_bounces, linear.data(), seed);
-
-    // Gamma correction. Taking the square root is gamma 2.0, not 2.2: an
-    // approximation of sRGB that is close enough by eye and one instruction
-    // instead of a pow().
-    for (int c = 0; c < 3 * width; ++c)
-        out[c] = static_cast<uint8_t>(256 * clamp(std::sqrt(linear[c]), 0, real(0.999)));
+// A linear color channel as a display byte: gamma 2.0, then quantized.
+// Taking the square root is gamma 2.0, not 2.2: an approximation of sRGB that
+// is close enough by eye and one instruction instead of a pow().
+inline uint8_t to_display(float linear) {
+    return static_cast<uint8_t>(256 * clamp(std::sqrt(linear), 0, real(0.999)));
 }

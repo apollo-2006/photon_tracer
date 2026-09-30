@@ -102,6 +102,8 @@ make
 ./photon_tracer --threads 8         # fewer than every hardware thread
 ./photon_tracer --width 480         # a smaller 16:9 image
 ./photon_tracer --seed 7 --out a.ppm  # the same image every time, written to a.ppm
+./photon_tracer --out a.pfm         # linear floats (Portable Float Map) instead of display bytes
+make test                           # render regression tests, about 75 CPU-seconds
 ```
 
 Renders 1920x1080 at 50 samples per pixel. The output is a 6 MB binary PPM; most image
@@ -210,6 +212,29 @@ BVH's box test runs on.
 
 The page now also turns the BVH off by default for the five-sphere scene, as the native
 renderer does, which makes the first render a visitor sees 1.07 s instead of 1.24 s.
+
+## Tests
+
+A path traced image is noisy, so a new render never matches a reference byte for byte,
+and the noise differs across the frame: sky is exact, glass is not. `tests/render_test.py`
+compares statistics instead. `tests/reference.json` holds, for every 20x20 block of each
+scene at 960x540 and 200 samples per pixel, the mean linear color and how much that mean
+varies between seeds, measured from 16 renders. `make test` renders each scene once with a
+seed the reference did not use and fails if any block, row of blocks, or the whole image
+is further from the reference than that noise explains. It also checks that one seed
+gives identical bytes on one thread and on three. Colors are compared in linear light,
+from the renderer's PFM output, because averaging after gamma and clamping biases noisy
+pixels.
+
+It is sensitive enough to catch the precision bug from moving to `float`, which
+darkened the ground by about 0.02 of a display level on average: with it put back, the
+whole-image z-scores are -9 to -13 against a limit of 5, while six seeds of correct
+code stay within +/-2.6. It also found that the field scene came out differently under
+GCC and clang. After an intended change to how scenes look, rebuild the reference with
+`tests/render_test.py reference`, which takes under a minute on 32 threads.
+
+CI runs the tests on every push and pull request, and before each deploy of the demo,
+and writes both benchmarks to the run's summary.
 
 ## Web demo
 

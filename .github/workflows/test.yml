@@ -1,0 +1,33 @@
+name: test
+
+# Render regression tests on every push and pull request, and the benchmarks
+# written to the run's summary. Runner timings vary too much from run to run to
+# fail a build on, so the benchmarks are there to read, not to gate.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: make
+      - name: Render tests
+        run: make test
+      - name: Native benchmark
+        run: |
+          echo "### Native, $(nproc) threads" >> "$GITHUB_STEP_SUMMARY"
+          bench/native.sh 1 >> "$GITHUB_STEP_SUMMARY"
+      - uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 6.0.9
+      - name: WebAssembly benchmark
+        run: |
+          echo "### WebAssembly, one thread, Node" >> "$GITHUB_STEP_SUMMARY"
+          bench/wasm.sh >> "$GITHUB_STEP_SUMMARY"

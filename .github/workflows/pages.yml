@@ -5,7 +5,7 @@ name: demo
 on:
   push:
     branches: [main]
-    paths: ['src/**', 'include/**', 'web/**', 'Makefile', '.github/workflows/pages.yml']
+    paths: ['src/**', 'include/**', 'web/**', 'tests/**', 'Makefile', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build the native renderer
         run: make
+      - name: Render tests
+        run: make test
       - uses: mymindstorm/setup-emsdk@v16
         with:
           # The Emscripten release the demo was built and tested with.

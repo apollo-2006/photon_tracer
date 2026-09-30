@@ -23,7 +23,11 @@ $(OBJ_DIR):
 
 -include $(OBJS:.o=.d)
 
+# Render regression tests: see tests/render_test.py.
+test: $(TARGET)
+	python3 tests/render_test.py check
+
 clean:
 	rm -rf $(OBJ_DIR) $(TARGET) render.ppm
 
-.PHONY: all clean
+.PHONY: all clean test

@@ -73,8 +73,8 @@ int main(int argc, char** argv) {
     // 3. World Composition
     const geometry world = build_world(scene, use_bvh, obj_text);
 
-    // 4. Threading Setup
-    std::vector<uint8_t> image(3 * image_width * image_height);
+    // 4. Threading Setup. Linear color, converted for display when written.
+    std::vector<float> image(3 * static_cast<size_t>(image_width) * image_height);
     int num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;
     if (threads_flag > 0) num_threads = threads_flag;
@@ -96,9 +96,9 @@ int main(int argc, char** argv) {
     // 5. The Render Worker
     auto render_worker = [&]() {
         for (int j = next_row.fetch_add(1); j < image_height; j = next_row.fetch_add(1)) {
-            // j counts up from the bottom; the file is written top row first.
-            render_row(world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
-                       &image[3 * (image_height - 1 - j) * image_width], seed);
+            // j counts up from the bottom; image is stored top row first.
+            render_row_linear(world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
+                              &image[3 * static_cast<size_t>(image_height - 1 - j) * image_width], seed);
 
             std::lock_guard<std::mutex> lock(progress_mutex);
             rows_completed++;
@@ -121,15 +121,32 @@ int main(int argc, char** argv) {
 
     // 7. Output to File. Binary PPM (P6): the header, then the bytes as they
     // are. The ASCII form (P3) was four times the size and, once rendering got
-    // fast, a fifth of the whole run.
+    // fast, a fifth of the whole run. A path ending in .pfm gets the linear
+    // floats instead, as a Portable Float Map, for the render tests: averaging
+    // after gamma and clamping would bias noisy pixels.
     std::cerr << "\nWriting to " << out_path << "...\n";
     std::ofstream out(out_path, std::ios::binary);
     if (!out) {
         std::cerr << "Failed to open " << out_path << " for writing.\n";
         return 1;
     }
-    out << "P6\n" << image_width << ' ' << image_height << "\n255\n";
-    out.write(reinterpret_cast<const char*>(image.data()), static_cast<std::streamsize>(image.size()));
+    const bool pfm = out_path.size() >= 4 && out_path.compare(out_path.size() - 4, 4, ".pfm") == 0;
+    if (pfm) {
+        // -1: little-endian floats. PFM stores the bottom row first.
+        out << "PF\n" << image_width << ' ' << image_height << "\n-1.0\n";
+        for (int y = image_height - 1; y >= 0; --y)
+            out.write(reinterpret_cast<const char*>(&image[3 * static_cast<size_t>(y) * image_width]),
+                      static_cast<std::streamsize>(3 * sizeof(float) * image_width));
+    } else {
+        std::vector<uint8_t> bytes(image.size());
+        for (size_t c = 0; c < image.size(); ++c) bytes[c] = to_display(image[c]);
+        out << "P6\n" << image_width << ' ' << image_height << "\n255\n";
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    if (!out) {
+        std::cerr << "Failed to write " << out_path << ".\n";
+        return 1;
+    }
 
     std::cerr << "Render Complete.\n";
     std::cerr << image_width << "x" << image_height << " at " << samples_per_pixel
