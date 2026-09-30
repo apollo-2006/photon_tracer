@@ -19,7 +19,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned, like the Emscripten release below, so a runner image change
+    # (ubuntu-latest moves to Ubuntu 26 in October 2026) cannot change the
+    # build without a commit here.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Build the native renderer
@@ -36,7 +39,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
