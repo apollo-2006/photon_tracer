@@ -11,6 +11,7 @@ struct hit_record {
     bool front_face;  // Did we hit the outside or the inside?
     const material* mat = nullptr;  // What the surface is made of
     bool sampled_light = false;     // One of the lights direct_light() samples
+    real tex_u = 0, tex_v = 0;      // Texture coordinates, for textured materials
 
     // Determines if the ray hit the outside of the object or from the inside
     inline void set_face_normal(const ray& r, const vec3& outward_normal) {

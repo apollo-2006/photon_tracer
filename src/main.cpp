@@ -28,6 +28,7 @@ int main(int argc, char** argv) {
     int threads_flag = 0;
     bool nee = true;
     bool denoise_flag = false;
+    double turn_deg = 0;
     int image_width = 1920;
     std::string out_path = "render.ppm";
     uint64_t seed = (uint64_t(std::random_device{}()) << 32) ^ std::random_device{}();
@@ -38,6 +39,7 @@ int main(int argc, char** argv) {
         else if (arg == "--room") scene = scene_id::room;
         else if (arg == "--no-nee") nee = false;
         else if (arg == "--denoise") denoise_flag = true;
+        else if (arg == "--turn" && a + 1 < argc) turn_deg = std::stod(argv[++a]);
         else if (arg == "--obj" && a + 1 < argc) { scene = scene_id::mesh; obj_path = argv[++a]; }
         else if (arg == "--bvh") bvh_flag = 1;
         else if (arg == "--no-bvh") bvh_flag = 0;
@@ -47,7 +49,7 @@ int main(int argc, char** argv) {
         else if (arg == "--out" && a + 1 < argc) out_path = argv[++a];
         else if (arg == "--seed" && a + 1 < argc) seed = std::stoull(argv[++a]);
         else {
-            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH | --room] [--bvh|--no-bvh] [--no-nee] [--denoise] [--spp N]"
+            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH [--turn DEG] | --room] [--bvh|--no-bvh] [--no-nee] [--denoise] [--spp N]"
                       << " [--threads N] [--width N] [--out PATH] [--seed N]\n";
             return 2;
         }
@@ -76,7 +78,25 @@ int main(int argc, char** argv) {
     // 2. Camera Abstraction
 
     // 3. World Composition
-    geometry world = build_world(scene, use_bvh, obj_text);
+    // Material and texture files named by the OBJ are found next to it.
+    const std::string obj_dir = obj_path.find('/') == std::string::npos ? "" : obj_path.substr(0, obj_path.find_last_of('/') + 1);
+    const file_reader read_beside_obj = [&obj_dir](const std::string& name) {
+        std::ifstream f(obj_dir + name, std::ios::binary);
+        if (!f) {
+            std::cerr << "Could not open " << obj_dir + name << "; skipping it.\n";
+            return std::string();
+        }
+        std::ostringstream buf;
+        buf << f.rdbuf();
+        return buf.str();
+    };
+    geometry world;
+    try {
+        world = build_world(scene, use_bvh, obj_text, read_beside_obj, turn_deg);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to load " << obj_path << ": " << e.what() << '\n';
+        return 1;
+    }
     world.sample_lights = nee;
 
     // 4. Threading Setup. Linear color, converted for display when written.

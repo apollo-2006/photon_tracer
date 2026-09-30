@@ -90,6 +90,10 @@ struct first_hit {
     vec3 normal;
 };
 
+// With_first says, at compile time, whether first is written: the plain path
+// is the hottest code there is, and even a branch per bounce on a null
+// pointer cost about 5%.
+template <bool with_first = false>
 inline color ray_color(ray r, const geometry& world, int depth, first_hit* first = nullptr) {
     color throughput(1, 1, 1), radiance(0, 0, 0);
     // Whether the last bounce was off a matte surface that sampled the lights
@@ -101,7 +105,7 @@ inline color ray_color(ray r, const geometry& world, int depth, first_hit* first
 
         hit_record rec;
         if (!world.hit(r, real(0.001), 1000, rec)) {
-            if (first && bounce == 0) *first = {color(1, 1, 1), vec3(0, 0, 0)};
+            if constexpr (with_first) if (bounce == 0) *first = {color(1, 1, 1), vec3(0, 0, 0)};
             return radiance + throughput * background(world, r);
         }
 
@@ -110,8 +114,8 @@ inline color ray_color(ray r, const geometry& world, int depth, first_hit* first
         ray scattered;
         color attenuation;
         const bool scatters = rec.mat->scatter(r, rec, attenuation, scattered);
-        if (first && bounce == 0)
-            *first = {scatters && !rec.mat->transmissive ? attenuation : color(1, 1, 1), rec.normal};
+        if constexpr (with_first)
+            if (bounce == 0) *first = {scatters && !rec.mat->transmissive ? attenuation : color(1, 1, 1), rec.normal};
         if (!scatters) return radiance;
         // Not on the last bounce allowed: a light sample there would stand in
         // for one more ray than the path is allowed, which counted about 1%
@@ -207,7 +211,7 @@ inline camera make_camera(scene_id id) {
 
 // The mesh scene: a model read from OBJ text (the Utah teapot in the repo) in
 // polished copper, between a glass and a matte sphere.
-inline geometry make_mesh_scene(const std::string& obj_text) {
+inline geometry make_mesh_scene(const std::string& obj_text, const file_reader& read = {}, double turn_deg = 0) {
     geometry world;
     auto ground = world.own(std::make_shared<lambertian>(color(0.8, 0.8, 0.0)));
     auto copper = world.own(std::make_shared<metal>(color(0.95, 0.64, 0.54), 0.05));
@@ -215,7 +219,7 @@ inline geometry make_mesh_scene(const std::string& obj_text) {
     world.large_spheres.emplace_back(point3(0, -100.5, -1), 100.0, ground);
     world.spheres.emplace_back(point3(-1.25, -0.2, -1.4), 0.3, world.own(std::make_shared<dielectric>(1.5)));
     world.spheres.emplace_back(point3( 1.25, -0.2, -1.4), 0.3, world.own(std::make_shared<lambertian>(color(0.1, 0.2, 0.5))));
-    world.triangles = load_obj(obj_text, point3(0, -0.5, -1.2), 0.75, copper);
+    load_obj(world, obj_text, point3(0, -0.5, -1.2), 0.75, copper, read, turn_deg);
     return world;
 }
 
@@ -257,8 +261,10 @@ inline geometry make_room_scene() {
 
 // The scene as something to trace: the plain list, or a BVH over it. obj_text
 // is only read by the mesh scene.
-inline geometry build_world(scene_id id, bool use_bvh, const std::string& obj_text = "") {
-    geometry world = id == scene_id::mesh ? make_mesh_scene(obj_text)
+// read, if given, finds the files the OBJ refers to (see obj.hpp).
+inline geometry build_world(scene_id id, bool use_bvh, const std::string& obj_text = "", const file_reader& read = {},
+                            double turn_deg = 0) {
+    geometry world = id == scene_id::mesh ? make_mesh_scene(obj_text, read, turn_deg)
                    : id == scene_id::room ? make_room_scene()
                                           : make_scene(id);
     world.build(use_bvh);
@@ -286,9 +292,10 @@ constexpr int aux_floats = 7;
 
 inline real luminance(const color& c) { return real(0.2126) * c.x() + real(0.7152) * c.y() + real(0.0722) * c.z(); }
 
-inline void render_row_linear(const geometry& world, const camera& cam, int j, int width, int height,
-                              int samples_per_pixel, int max_bounces, float* out, uint64_t seed,
-                              int first_sample = 0, float* aux = nullptr) {
+template <bool with_aux>
+inline void render_row_impl(const geometry& world, const camera& cam, int j, int width, int height,
+                            int samples_per_pixel, int max_bounces, float* out, uint64_t seed, int first_sample,
+                            float* aux) {
     seed_row(seed, j, first_sample);
     const real scale = real(1) / samples_per_pixel;
     for (int i = 0; i < width; ++i) {
@@ -305,21 +312,21 @@ inline void render_row_linear(const geometry& world, const camera& cam, int j, i
             real u = (i + du) / (width - 1);
             real v = (j + dv) / (height - 1);
             ray r = cam.get_ray(u, v);
-            if (!aux) {
+            if constexpr (!with_aux) {
                 pixel_color = pixel_color + ray_color(r, world, max_bounces);
-                continue;
+            } else {
+                first_hit first;
+                const color c = ray_color<true>(r, world, max_bounces, &first);
+                pixel_color = pixel_color + c;
+                albedo = albedo + first.albedo;
+                normal = normal + first.normal;
+                lum2 += luminance(c) * luminance(c);
             }
-            first_hit first;
-            const color c = ray_color(r, world, max_bounces, &first);
-            pixel_color = pixel_color + c;
-            albedo = albedo + first.albedo;
-            normal = normal + first.normal;
-            lum2 += luminance(c) * luminance(c);
         }
         out[3 * i]     = static_cast<float>(pixel_color.x() * scale);
         out[3 * i + 1] = static_cast<float>(pixel_color.y() * scale);
         out[3 * i + 2] = static_cast<float>(pixel_color.z() * scale);
-        if (aux) {
+        if constexpr (with_aux) {
             float* a = aux + aux_floats * i;
             for (int c = 0; c < 3; ++c) {
                 a[c] = static_cast<float>(albedo.e[c] * scale);
@@ -328,6 +335,13 @@ inline void render_row_linear(const geometry& world, const camera& cam, int j, i
             a[6] = static_cast<float>(lum2 * scale);
         }
     }
+}
+
+inline void render_row_linear(const geometry& world, const camera& cam, int j, int width, int height,
+                              int samples_per_pixel, int max_bounces, float* out, uint64_t seed,
+                              int first_sample = 0, float* aux = nullptr) {
+    if (aux) render_row_impl<true>(world, cam, j, width, height, samples_per_pixel, max_bounces, out, seed, first_sample, aux);
+    else render_row_impl<false>(world, cam, j, width, height, samples_per_pixel, max_bounces, out, seed, first_sample, aux);
 }
 
 // A linear color channel as a display byte: gamma 2.0, then quantized.

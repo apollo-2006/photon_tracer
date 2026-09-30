@@ -3,6 +3,9 @@
 // scatters, in which direction, and how much of each color channel survives.
 #include "hittable.hpp"
 #include "sampler.hpp"
+#include "texture.hpp"
+
+#include <memory>
 #include "vec3.hpp"
 
 #include <cmath>
@@ -43,8 +46,11 @@ inline vec3 refract(const vec3& uv, const vec3& n, real ratio) {
 class lambertian : public material {
 public:
     color albedo;
+    // If set, the albedo is multiplied by the texture at the hit's texture coordinates.
+    std::shared_ptr<const image_texture> texture;
 
-    explicit lambertian(const color& a) : albedo(a) { diffuse = true; }
+    explicit lambertian(const color& a, std::shared_ptr<const image_texture> tex = nullptr)
+        : albedo(a), texture(std::move(tex)) { diffuse = true; }
 
     // Cosine-weighted directions around the normal, drawn from two numbers so
     // that they can come from the path's well-spread sample pairs
@@ -63,7 +69,7 @@ public:
         const vec3 direction = t1 * (r * std::cos(phi)) + t2 * (r * std::sin(phi)) +
                                n * std::sqrt(std::fmax(real(0), 1 - a));
         scattered = ray(rec.p, direction);
-        attenuation = albedo;
+        attenuation = texture ? albedo * texture->sample(rec.tex_u, rec.tex_v) : albedo;
         return true;
     }
 };

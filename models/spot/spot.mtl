@@ -1,0 +1,5 @@
+# Spot, textured with its map, matte.
+newmtl spot
+Kd 1 1 1
+illum 2
+map_Kd spot_texture.png

@@ -22,10 +22,18 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   only worked out once, for the nearest hit.
 * **Triangles and OBJ meshes.** `triangle.hpp` intersects with Moller-Trumbore, which
   solves for the hit distance and barycentric coordinates in one step. `obj.hpp` reads
-  vertex positions and faces from Wavefront OBJ text (polygons are split into fans),
-  scales the model into place, and computes smooth vertex normals by summing the
-  area-weighted normals of the faces around each vertex, so a low-poly model shades
-  smoothly. Which side a ray hit still comes from the true face normal.
+  positions, texture coordinates, normals and faces from Wavefront OBJ text (polygons
+  are split into fans) and scales the model into place. Where the file gives no normals,
+  it computes smooth vertex normals by summing the area-weighted normals of the faces
+  around each vertex, so a low-poly model shades smoothly. Which side a ray hit still
+  comes from the true face normal.
+* **Materials from MTL files, and textures.** An OBJ's `.mtl` files map onto the four
+  materials: an emissive `Ke` makes a light, a dissolve below 1 or a glass illumination
+  model makes glass with index `Ni`, `illum 3` makes metal tinted by `Ks` with a blur from
+  the shininess `Ns`, and anything else is matte, colored by `Kd` times its `map_Kd`
+  texture. Textures are sampled bilinearly in linear color. They may be PNG or PPM, read
+  by `image_io.hpp` without an image library: a small inflate written from RFC 1951 and a
+  PNG reader covering gray, RGB, palette and alpha images at 8 or 16 bits.
 * **Materials.** Each sphere carries a material (`material.hpp`) that decides how a
   ray scatters and how much of each color channel survives:
   * *Lambertian:* scatters toward the normal plus a random unit vector, a
@@ -113,6 +121,10 @@ out instead of bunching up at the horizon.
 polished copper between a glass and a matte sphere. `--obj PATH` puts any other OBJ model
 in its place.
 
+`--obj models/spot/spot.obj --turn 150` puts Keenan Crane's cow Spot (public domain,
+5,856 triangles) in the teapot's place, textured through its MTL file, turned to face the
+camera.
+
 `--room` is a closed box, red on the left and green on the right, lit only by a small
 sphere lamp under the ceiling, with glass, metal and matte spheres on the floor. No sky
 reaches in, so all of its light comes through next event estimation or, for caustics
@@ -134,14 +146,15 @@ make
 ./photon_tracer --mesh              # the Utah teapot
 ./photon_tracer --room              # a closed room lit by one small lamp
 ./photon_tracer --room --no-nee     # the same without sampling the lamp directly
-./photon_tracer --obj model.obj     # your own model in the teapot's place
+./photon_tracer --obj model.obj     # your own model in the teapot's place, with its .mtl materials
+./photon_tracer --obj models/spot/spot.obj --turn 150  # a textured cow, turned to face the camera
 ./photon_tracer --spp 10            # fewer samples per pixel
 ./photon_tracer --threads 8         # fewer than every hardware thread
 ./photon_tracer --width 480         # a smaller 16:9 image
 ./photon_tracer --seed 7 --out a.ppm  # the same image every time, written to a.ppm
 ./photon_tracer --out a.pfm         # linear floats (Portable Float Map) instead of display bytes
 ./photon_tracer --room --spp 16 --denoise  # few samples, then the denoiser
-make test                           # render regression tests, about 75 CPU-seconds
+make test                           # unit tests, then render regression tests (~3 CPU-minutes)
 ```
 
 Renders 1920x1080 at 50 samples per pixel. The output is a 6 MB binary PPM; most image
@@ -253,6 +266,12 @@ renderer does, which makes the first render a visitor sees 1.07 s instead of 1.2
 
 ## Tests
 
+`make test` first runs two unit tests: `tests/obj_test.cpp` feeds the OBJ and MTL reader
+small files (quads, negative indices, file normals, texture coordinates, every material
+kind, a texture beside the MTL), and `tests/image_test.py` encodes PNGs of every supported
+kind with Python's zlib, covering all five row filters and stored, fixed and dynamic
+deflate blocks, and checks that `image_io.hpp` decodes them to the same pixels.
+
 A path traced image is noisy, so a new render never matches a reference byte for byte,
 and the noise differs across the frame: sky is exact, glass is not. `tests/render_test.py`
 compares statistics instead. `tests/reference.json` holds, for every 20x20 block of each
@@ -301,8 +320,9 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
 
 ## Known limits
 
-* **Positions only from OBJ.** Texture coordinates, file normals and `.mtl` materials are
-  ignored; a whole model gets one material.
+* **Only diffuse textures.** From MTL, only `map_Kd` is read: no bump, normal, specular or
+  alpha maps, and PNG textures must not be interlaced. JPEG is not supported. The browser
+  demo loads no MTL files at all.
 * **Only spheres are sampled as lights.** An emissive triangle (a light made from a mesh)
   still lights the scene, but only through bounces that happen to hit it, so it is noisy.
   And light is sampled only from matte surfaces: caustics through glass, and light off

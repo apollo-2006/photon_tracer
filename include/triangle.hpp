@@ -17,6 +17,7 @@ public:
     vec3 n0, n1, n2;    // Vertex normals, interpolated across the face
     vec3 face_normal;
     const material* mat;
+    real uv[6] = {0, 0, 0, 0, 0, 0};  // Texture coordinates at the three corners
 
     // Flat shaded: every vertex normal is the face normal.
     triangle(point3 a, point3 b, point3 c, const material* m)
@@ -64,6 +65,8 @@ public:
         vec3 n = (n0 * (1 - u - v) + n1 * u + n2 * v).normalize();
         rec.normal = rec.front_face ? n : -n;
         rec.mat = mat;
+        rec.tex_u = uv[0] * (1 - u - v) + uv[2] * u + uv[4] * v;
+        rec.tex_v = uv[1] * (1 - u - v) + uv[3] * u + uv[5] * v;
     }
 
     aabb bounding_box() const {

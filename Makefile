@@ -23,11 +23,20 @@ $(OBJ_DIR):
 
 -include $(OBJS:.o=.d)
 
-# Render regression tests: see tests/render_test.py.
-test: $(TARGET)
+# Unit tests for the OBJ reader and the PNG decoder, then the render
+# regression tests (tests/render_test.py).
+tests/obj_test: tests/obj_test.cpp $(wildcard include/*.hpp)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< -o $@
+
+tests/decode_image: tests/decode_image.cpp include/image_io.hpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< -o $@
+
+test: $(TARGET) tests/obj_test tests/decode_image
+	tests/obj_test
+	python3 tests/image_test.py
 	python3 tests/render_test.py check
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET) render.ppm
+	rm -rf $(OBJ_DIR) $(TARGET) render.ppm tests/obj_test tests/decode_image
 
 .PHONY: all clean test
