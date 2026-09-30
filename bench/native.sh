@@ -10,7 +10,7 @@ out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 
 echo "| scene | best of $runs | rays/s | rays |"
 echo "|---|---|---|---|"
-for scene in "materials:--no-bvh" "materials, BVH:--bvh" "field:--field" "teapot, 4 spp:--mesh --spp 4"; do
+for scene in "materials:--no-bvh" "materials, BVH:--bvh" "field:--field" "teapot, 4 spp:--mesh --spp 4" "room, 16 spp:--room --spp 16"; do
   name=${scene%%:*}; flags=${scene#*:}
   best=""
   for ((i = 0; i < runs; i++)); do

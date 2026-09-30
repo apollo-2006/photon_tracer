@@ -34,11 +34,21 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   * *Dielectric:* refracts by Snell's law, reflects under total internal reflection,
     and otherwise chooses between the two with Schlick's approximation. A sphere with a
     negative radius flips its normals inward, which makes a hollow glass shell.
+  * *Light:* gives off a color from its front face and scatters nothing.
 
   A path is capped at 10 bounces so a ray trapped between surfaces terminates. From the
   third bounce on, Russian roulette ends paths that can only carry a little light: a path
   continues with probability equal to its brightest remaining channel, and survivors are
   scaled up to match, so the image is the same on average with about 13% fewer rays.
+* **Lights and next event estimation.** A bounce only reaches a small light by luck, so
+  at every matte surface the tracer also aims a shadow ray at one of the scene's light
+  spheres, picked at random: at a direction drawn uniformly from the cone the sphere
+  fills as seen from that point. If nothing blocks it, the light's emission is added,
+  weighted by the Lambertian BRDF, the cosine at the surface and the probability of that
+  direction. A light the next bounce happens to hit is then not counted again. In the
+  room scene at 64 samples per pixel, this turns an image that is mostly noise into a
+  clean one (`--no-nee` switches it off to compare), and with enough samples both
+  converge to the same image to within 0.1%.
 * **BVH.** `bvh.hpp` builds a binary tree of axis-aligned bounding boxes over the scene
   with the surface area heuristic: centroids are sorted into 16 bins per axis and each
   node splits where the expected cost of tracing through its two halves is lowest. That
@@ -83,6 +93,11 @@ out instead of bunching up at the horizon.
 polished copper between a glass and a matte sphere. `--obj PATH` puts any other OBJ model
 in its place.
 
+`--room` is a closed box, red on the left and green on the right, lit only by a small
+sphere lamp under the ceiling, with glass, metal and matte spheres on the floor. No sky
+reaches in, so all of its light comes through next event estimation or, for caustics
+under the glass, through bounces that find the lamp.
+
 ## Build & Run
 ```bash
 # Clone the repository
@@ -97,6 +112,8 @@ make
 ./photon_tracer --field             # the 400-sphere scene
 ./photon_tracer --field --no-bvh    # the same, testing every sphere per ray
 ./photon_tracer --mesh              # the Utah teapot
+./photon_tracer --room              # a closed room lit by one small lamp
+./photon_tracer --room --no-nee     # the same without sampling the lamp directly
 ./photon_tracer --obj model.obj     # your own model in the teapot's place
 ./photon_tracer --spp 10            # fewer samples per pixel
 ./photon_tracer --threads 8         # fewer than every hardware thread
@@ -262,10 +279,10 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
 
 * **Positions only from OBJ.** Texture coordinates, file normals and `.mtl` materials are
   ignored; a whole model gets one material.
-* **No emissive materials.** Surfaces can be matte, metal or glass, but none give off
-  light.
-* **No light sources.** Illumination comes entirely from the sky gradient, which is why
-  the scene reads as overcast.
+* **Only spheres are sampled as lights.** An emissive triangle (a light made from a mesh)
+  still lights the scene, but only through bounces that happen to hit it, so it is noisy.
+  And light is sampled only from matte surfaces: caustics through glass, and light off
+  metal, still depend on luck.
 * **Scene-fixed cameras.** Each scene has a look-at camera with a field of view, but
   there are no controls for it and no depth of field.
 * **Row granularity.** Work is claimed a whole row at a time, so one expensive row still

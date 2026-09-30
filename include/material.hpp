@@ -11,6 +11,15 @@ public:
     virtual ~material() = default;
 
     virtual bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered) const = 0;
+
+    // Plain fields rather than virtual calls, since the tracer reads them at
+    // every bounce. emission: light given off by the front face, zero except
+    // for lights. diffuse: a matte surface, which also gathers light by
+    // sampling the lights directly (see direct_light() in renderer.hpp).
+    color emission;
+    bool diffuse = false;
+
+    bool emits() const { return emission.x() > 0 || emission.y() > 0 || emission.z() > 0; }
 };
 
 inline vec3 reflect(const vec3& v, const vec3& n) {
@@ -31,7 +40,7 @@ class lambertian : public material {
 public:
     color albedo;
 
-    explicit lambertian(const color& a) : albedo(a) {}
+    explicit lambertian(const color& a) : albedo(a) { diffuse = true; }
 
     bool scatter(const ray&, const hit_record& rec, color& attenuation, ray& scattered) const override {
         vec3 direction = rec.normal + random_in_unit_sphere().normalize();
@@ -58,6 +67,16 @@ public:
         // Fuzz can push the ray below the surface; absorb it there.
         return vec3::dot(scattered.direction(), rec.normal) > 0;
     }
+};
+
+// A light: gives off emit from its front face and scatters nothing. Spheres
+// made of it are sampled directly from matte surfaces; triangles made of it
+// are only found by rays that happen to hit them.
+class diffuse_light : public material {
+public:
+    explicit diffuse_light(const color& emit) { emission = emit; }
+
+    bool scatter(const ray&, const hit_record&, color&, ray&) const override { return false; }
 };
 
 // Glass, water, diamond. Refracts where it can, reflects where total internal

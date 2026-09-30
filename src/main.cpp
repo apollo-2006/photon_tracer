@@ -26,6 +26,7 @@ int main(int argc, char** argv) {
     std::string obj_path = "models/teapot.obj";
     int spp = 50;
     int threads_flag = 0;
+    bool nee = true;
     int image_width = 1920;
     std::string out_path = "render.ppm";
     uint64_t seed = (uint64_t(std::random_device{}()) << 32) ^ std::random_device{}();
@@ -33,6 +34,8 @@ int main(int argc, char** argv) {
         std::string arg = argv[a];
         if (arg == "--field") scene = scene_id::field;
         else if (arg == "--mesh") scene = scene_id::mesh;
+        else if (arg == "--room") scene = scene_id::room;
+        else if (arg == "--no-nee") nee = false;
         else if (arg == "--obj" && a + 1 < argc) { scene = scene_id::mesh; obj_path = argv[++a]; }
         else if (arg == "--bvh") bvh_flag = 1;
         else if (arg == "--no-bvh") bvh_flag = 0;
@@ -42,7 +45,7 @@ int main(int argc, char** argv) {
         else if (arg == "--out" && a + 1 < argc) out_path = argv[++a];
         else if (arg == "--seed" && a + 1 < argc) seed = std::stoull(argv[++a]);
         else {
-            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH] [--bvh|--no-bvh] [--spp N]"
+            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH | --room] [--bvh|--no-bvh] [--no-nee] [--spp N]"
                       << " [--threads N] [--width N] [--out PATH] [--seed N]\n";
             return 2;
         }
@@ -71,7 +74,8 @@ int main(int argc, char** argv) {
     // 2. Camera Abstraction
 
     // 3. World Composition
-    const geometry world = build_world(scene, use_bvh, obj_text);
+    geometry world = build_world(scene, use_bvh, obj_text);
+    world.sample_lights = nee;
 
     // 4. Threading Setup. Linear color, converted for display when written.
     std::vector<float> image(3 * static_cast<size_t>(image_width) * image_height);
@@ -153,7 +157,8 @@ int main(int argc, char** argv) {
               << " spp: rendered in " << render_s << " s, "
               << std::setprecision(3) << total_rays / render_s / 1e6 << std::setprecision(6) << "M rays/s ("
               << total_rays << " rays) on " << num_threads << " threads, "
-              << (scene == scene_id::field ? "field" : scene == scene_id::mesh ? "mesh" : "materials") << " scene, "
+              << (scene == scene_id::field ? "field" : scene == scene_id::mesh ? "mesh"
+                  : scene == scene_id::room ? "room" : "materials") << " scene, "
               << (use_bvh ? "BVH" : "no BVH") << ", seed " << seed << '\n';
     return 0;
 }

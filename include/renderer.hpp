@@ -20,24 +20,86 @@ inline thread_local long long rays_traced = 0;
 // Bounces every path gets before Russian roulette may end it.
 constexpr int roulette_after = 3;
 
+inline color background(const geometry& world, const ray& r) {
+    if (!world.sky) return color(0, 0, 0);
+    vec3 unit_direction = r.direction().normalize();
+    real t = real(0.5) * (unit_direction.y() + 1);
+    return color(1, 1, 1) * (1 - t) + color(0.5, 0.7, 1.0) * t;
+}
+
+// Next event estimation: light reaching a matte surface at rec straight from
+// one of the scene's light spheres, divided by the albedo (the caller
+// multiplies it back in). A bounce only finds a small light by luck; aiming a
+// shadow ray at one finds it every time the path is not blocked.
+//
+// One light is picked at random, and a direction is drawn uniformly from the
+// cone the light sphere fills as seen from rec, whose solid angle is
+// 2 pi (1 - cos_max). The estimate is the Lambertian BRDF (albedo / pi) times
+// the light's emission times the cosine at the surface, over the probability
+// of that direction.
+inline color direct_light(const geometry& world, const hit_record& rec) {
+    const uint32_t n = static_cast<uint32_t>(world.lights.size());
+    const uint32_t pick = std::min(static_cast<uint32_t>(random_real() * n), n - 1);
+    const sphere& light = world.spheres[world.lights[pick]];
+
+    const vec3 to_center = light.center - rec.p;
+    const real dist2 = vec3::dot(to_center, to_center), r2 = light.radius * light.radius;
+    if (dist2 <= r2) return color(0, 0, 0);  // Inside the light
+    const real sin2_max = r2 / dist2;
+    const real cos_max = std::sqrt(1 - sin2_max);
+    // 1 - cos_max, without the cancellation of subtracting two numbers near 1
+    // for a small or distant light.
+    const real one_minus_cos_max = sin2_max / (1 + cos_max);
+
+    // A direction in the cone, around w, the direction to the center.
+    const vec3 w = to_center / std::sqrt(dist2);
+    const vec3 a = std::fabs(w.x()) > real(0.9) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    const vec3 u = cross(w, a).normalize(), v = cross(w, u);
+    const real cos_t = 1 - random_real() * one_minus_cos_max;
+    const real sin_t = std::sqrt(std::fmax(real(0), 1 - cos_t * cos_t));
+    const real phi = 2 * real(M_PI) * random_real();
+    const vec3 dir = u * (std::cos(phi) * sin_t) + v * (std::sin(phi) * sin_t) + w * cos_t;
+
+    const real cos_surface = vec3::dot(dir, rec.normal);
+    if (cos_surface <= 0) return color(0, 0, 0);  // The light is behind the surface here
+
+    const ray shadow(rec.p, dir);
+    real t_light = aabb::inf();
+    if (!light.intersect(shadow, real(0.001), t_light)) return color(0, 0, 0);  // Grazed the rim
+    ++rays_traced;
+    if (world.occluded(shadow, real(0.001), t_light * real(0.9999))) return color(0, 0, 0);
+
+    hit_record at_light;
+    light.fill(shadow, t_light, at_light);
+    if (!at_light.front_face) return color(0, 0, 0);
+    const real pdf = 1 / (2 * real(M_PI) * one_minus_cos_max);
+    return light.mat->emission * (cos_surface / real(M_PI) / pdf * n);
+}
+
 // Follows one path for up to depth rays. throughput is how much of the light
 // arriving along the current ray still reaches the camera: the product of the
 // attenuations so far.
 inline color ray_color(ray r, const geometry& world, int depth) {
-    color throughput(1, 1, 1);
+    color throughput(1, 1, 1), radiance(0, 0, 0);
+    // Whether the last bounce was off a matte surface that sampled the lights
+    // directly: a light this ray then hits was already counted there.
+    bool sampled = false;
     for (int bounce = 0; bounce < depth; ++bounce) {
         ++rays_traced;
 
         hit_record rec;
-        if (!world.hit(r, real(0.001), 1000, rec)) {
-            vec3 unit_direction = r.direction().normalize();
-            real t = real(0.5) * (unit_direction.y() + 1);
-            return throughput * (color(1, 1, 1) * (1 - t) + color(0.5, 0.7, 1.0) * t);
-        }
+        if (!world.hit(r, real(0.001), 1000, rec)) return radiance + throughput * background(world, r);
+
+        if (rec.front_face && !(sampled && rec.sampled_light)) radiance = radiance + throughput * rec.mat->emission;
 
         ray scattered;
         color attenuation;
-        if (!rec.mat->scatter(r, rec, attenuation, scattered)) return color(0, 0, 0);
+        if (!rec.mat->scatter(r, rec, attenuation, scattered)) return radiance;
+        // Not on the last bounce allowed: a light sample there would stand in
+        // for one more ray than the path is allowed, which counted about 1%
+        // more light than plain path tracing in the room scene.
+        sampled = rec.mat->diffuse && world.sample_lights && !world.lights.empty() && bounce + 1 < depth;
+        if (sampled) radiance = radiance + throughput * attenuation * direct_light(world, rec);
         throughput = throughput * attenuation;
         r = scattered;
 
@@ -49,15 +111,15 @@ inline color ray_color(ray r, const geometry& world, int depth) {
         if (bounce + 1 >= roulette_after) {
             real p = std::fmax(throughput.x(), std::fmax(throughput.y(), throughput.z()));
             if (p < 1) {
-                if (random_real() >= p) return color(0, 0, 0);
+                if (random_real() >= p) return radiance;
                 throughput = throughput / p;
             }
         }
     }
-    return color(0, 0, 0);
+    return radiance;
 }
 
-enum class scene_id { materials = 0, field = 1, mesh = 2 };
+enum class scene_id { materials = 0, field = 1, mesh = 2, room = 3 };
 
 // The materials scene: matte, glass and metal spheres one unit in front of the
 // camera, on a huge matte sphere as ground. The glass one is hollow: a second
@@ -121,6 +183,7 @@ inline geometry make_scene(scene_id id = scene_id::materials) {
 inline camera make_camera(scene_id id) {
     if (id == scene_id::field) return camera(point3(0, 1.0, 1.2), point3(0, -0.3, -1.2), 55.0);
     if (id == scene_id::mesh) return camera(point3(0, 0.5, 1.2), point3(0, -0.15, -1.2), 45.0);
+    if (id == scene_id::room) return camera(point3(0, 0, 0.3), point3(0, -0.15, -3.0), 62.0);
     return camera();
 }
 
@@ -138,10 +201,48 @@ inline geometry make_mesh_scene(const std::string& obj_text) {
     return world;
 }
 
+// A parallelogram as two triangles: corner p, edges e1 and e2.
+inline void add_quad(geometry& world, point3 p, vec3 e1, vec3 e2, const material* m) {
+    world.triangles.emplace_back(p, p + e1, p + e1 + e2, m);
+    world.triangles.emplace_back(p, p + e1 + e2, p + e2, m);
+}
+
+// The room scene: a closed box, red on the left and green on the right, lit
+// only by a small sphere lamp under the ceiling, with glass, metal and matte
+// spheres on the floor. No sky reaches in, so every bit of light comes from
+// the lamp, which is the case next event estimation is for: a bounce finds a
+// lamp this small only by luck.
+inline geometry make_room_scene() {
+    geometry world;
+    world.sky = false;
+    auto white = world.own(std::make_shared<lambertian>(color(0.73, 0.73, 0.73)));
+    auto red   = world.own(std::make_shared<lambertian>(color(0.65, 0.05, 0.05)));
+    auto green = world.own(std::make_shared<lambertian>(color(0.12, 0.45, 0.15)));
+    auto lamp  = world.own(std::make_shared<diffuse_light>(color(30, 27, 22)));
+
+    // x from -1.75 to 1.75, y from -1 to 1, z from -3.5 to 0.5; the camera
+    // stands inside, near the front wall.
+    const double x0 = -1.75, x1 = 1.75, y0 = -1, y1 = 1, z0 = -3.5, z1 = 0.5;
+    add_quad(world, point3(x0, y0, z1), vec3(x1 - x0, 0, 0), vec3(0, 0, z0 - z1), white);  // Floor
+    add_quad(world, point3(x0, y1, z1), vec3(x1 - x0, 0, 0), vec3(0, 0, z0 - z1), white);  // Ceiling
+    add_quad(world, point3(x0, y0, z0), vec3(x1 - x0, 0, 0), vec3(0, y1 - y0, 0), white);  // Back
+    add_quad(world, point3(x0, y0, z1), vec3(x1 - x0, 0, 0), vec3(0, y1 - y0, 0), white);  // Front
+    add_quad(world, point3(x0, y0, z1), vec3(0, 0, z0 - z1), vec3(0, y1 - y0, 0), red);    // Left
+    add_quad(world, point3(x1, y0, z1), vec3(0, 0, z0 - z1), vec3(0, y1 - y0, 0), green);  // Right
+
+    world.spheres.emplace_back(point3(0, 0.72, -2.0), 0.14, lamp);
+    world.spheres.emplace_back(point3(-0.8, -0.55, -2.3), 0.45, world.own(std::make_shared<dielectric>(1.5)));
+    world.spheres.emplace_back(point3(0.85, -0.6, -1.8), 0.4, world.own(std::make_shared<metal>(color(0.9, 0.9, 0.9), 0.02)));
+    world.spheres.emplace_back(point3(0.15, -0.75, -2.9), 0.25, world.own(std::make_shared<lambertian>(color(0.1, 0.2, 0.5))));
+    return world;
+}
+
 // The scene as something to trace: the plain list, or a BVH over it. obj_text
 // is only read by the mesh scene.
 inline geometry build_world(scene_id id, bool use_bvh, const std::string& obj_text = "") {
-    geometry world = id == scene_id::mesh ? make_mesh_scene(obj_text) : make_scene(id);
+    geometry world = id == scene_id::mesh ? make_mesh_scene(obj_text)
+                   : id == scene_id::room ? make_room_scene()
+                                          : make_scene(id);
     world.build(use_bvh);
     return world;
 }

@@ -43,6 +43,7 @@ SCENES = {
     "materials": [],
     "field": ["--field"],
     "teapot": ["--mesh"],
+    "room": ["--room"],
 }
 
 # Largest |z| allowed for a single block, for a row of blocks, and for the whole
