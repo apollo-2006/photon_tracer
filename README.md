@@ -294,6 +294,55 @@ BVH's box test runs on.
 The page now also turns the BVH off by default for the five-sphere scene, as the native
 renderer does, which makes the first render a visitor sees 1.07 s instead of 1.24 s.
 
+## GPU: mesh shaders and ray queries
+
+`photon_tracer_gpu` (`make gpu`, which needs Vulkan and `glslc`) renders the crowd scene on
+the GPU, rasterized and ray traced together. For each sample:
+
+1. **Task shaders** take the meshlets of every instance, 64 to a workgroup, and drop those
+   whose bounding sphere is outside the view, or, on a closed mesh, whose normal cone
+   faces away from the camera (`gpu/shaders/cull.task`). Meshlets are built on the CPU by
+   `include/meshlets.hpp`: at most 64 vertices and 124 triangles, grouped in BVH leaf
+   order.
+2. **Mesh shaders** transform the survivors' vertices by the instance and the camera and
+   emit their triangles into a **visibility buffer**: which instance and triangle each
+   pixel sees (`draw.mesh`, `visibility.frag`).
+3. **A compute pass** starts each path there: it intersects that one triangle again for
+   the exact point, then traces every bounce with **ray queries** against a bottom-level
+   acceleration structure for the mesh and a top-level one over its instances, the same
+   two-level split as the CPU renderer's instancing, plus the analytic ground sphere
+   (`trace.comp`).
+
+The rasterizer's projection is built from the CPU camera's own pixel mapping, jittered by
+the sample's offset within the pixel, so each rasterized pixel sees exactly what that
+sample's camera ray would hit; the offset is the same for every pixel in a pass, as TAA
+jitter is. Materials, sky and Russian roulette are the CPU renderer's, and so are
+textures: the shader decodes sRGB and filters bilinearly itself, because the texture
+units' coarser filtering showed on Spot as a small, steady shift from the CPU image.
+`make test-gpu` checks its images against the CPU renderer's references, for the teapot
+crowd and for a crowd of Spots, which is closed (so cone culling runs) and textured.
+
+1920x1080 at 50 samples per pixel, AMD Radeon RX 9070 XT (RADV) against the Ryzen 9
+5900XT's 32 threads:
+
+| crowd | CPU | GPU | of which rasterizing, tracing | meshlets culled |
+|---|---|---|---|---|
+| 400 teapots, 2.5M triangles | 3.11 s | **0.19 s** | 20 ms, 165 ms | 12% |
+| 400 Spots, textured | 2.06 s | **0.16 s** | 17 ms, 135 ms | 14% |
+| 1,600 bunnies, 111M triangles | 2.85 s | **0.52 s** | 374 ms, 146 ms | 20% |
+
+The GPU traces 1.2 billion rays a second. Where the crowd is dense, rasterizing takes
+over: every pass draws about a million bunny meshlets, most of them hidden behind nearer
+bunnies, which is what occlusion culling in the task shader would remove.
+
+```bash
+make gpu
+./photon_tracer_gpu --crowd --spp 50                          # the teapot crowd
+./photon_tracer_gpu --crowd 40 --obj models/stanford-bunny.obj  # 1,600 bunnies
+./photon_tracer_gpu --crowd --validate                        # with the Khronos validation layers
+make test-gpu
+```
+
 ## Tests
 
 `make test` first runs two unit tests: `tests/obj_test.cpp` feeds the OBJ and MTL reader
@@ -361,6 +410,10 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
   metal, still depend on luck.
 * **Scene-fixed cameras.** Each scene has a look-at camera with a field of view, but
   there are no controls for it and no depth of field.
+* **The GPU renderer draws only the crowd.** No small spheres (they would need procedural
+  geometry in the acceleration structures), no lights or next event estimation, no
+  denoiser, and no occlusion culling yet. It needs Vulkan 1.3 with mesh shaders and ray
+  queries, so the browser demo, on WebGPU's terms or WebAssembly's, cannot use it.
 * **Row granularity.** Work is claimed a whole row at a time, so one expensive row still
   runs on a single thread.
 

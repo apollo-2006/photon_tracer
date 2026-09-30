@@ -20,6 +20,13 @@ jobs:
         run: make
       - name: Render tests
         run: make test
+      # The runners have no GPU, so the mesh shader and ray query renderer is
+      # only built here, to catch compile errors in it and its shaders.
+      - name: Build the GPU renderer
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libvulkan-dev glslc
+          make gpu
       - name: Native benchmark
         run: |
           echo "### Native, $(nproc) threads" >> "$GITHUB_STEP_SUMMARY"

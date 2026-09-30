@@ -1,0 +1,35 @@
+#version 460
+// Mesh shader: one workgroup per surviving meshlet. Transforms its vertices
+// by the instance and the camera, and emits its triangles, each tagged with
+// the instance and the mesh triangle it is, for the visibility buffer.
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+layout(triangles, max_vertices = 64, max_primitives = 124) out;
+
+taskPayloadSharedEXT Payload payload;
+
+// (instance + 1, triangle): 0 in the buffer means nothing was drawn there.
+layout(location = 0) perprimitiveEXT flat out uvec2 out_id[];
+
+void main() {
+    const Meshlet ml = meshlets[payload.meshlets[gl_WorkGroupID.x]];
+    const Instance inst = instances[payload.instance];
+    SetMeshOutputsEXT(ml.vertex_count, ml.triangle_count);
+
+    const uint k = gl_LocalInvocationIndex;
+    if (k < ml.vertex_count) {
+        const vec3 p = positions[meshlet_vertices[ml.vertex_offset + k]];
+        vec4 clip = frame.view_proj * vec4(transform_point(inst.to_world, p), 1);
+        // This sample's offset within the pixel, the same the tracer uses.
+        clip.xy += sample_pc.jitter_ndc * clip.w;
+        gl_MeshVerticesEXT[k].gl_Position = clip;
+    }
+    for (uint t = k; t < ml.triangle_count; t += 64) {
+        const uint packed = meshlet_triangles[ml.triangle_offset + t];
+        gl_PrimitiveTriangleIndicesEXT[t] = uvec3(packed & 255u, (packed >> 8) & 255u, (packed >> 16) & 255u);
+        out_id[t] = uvec2(payload.instance + 1, meshlet_triangle_ids[ml.triangle_offset + t]);
+    }
+}

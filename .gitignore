@@ -68,3 +68,5 @@ web/dist/
 /models/xyzrgb_dragon.obj
 /models/*.obj.part
 /tests/meshlet_test
+/photon_tracer_gpu
+__pycache__/

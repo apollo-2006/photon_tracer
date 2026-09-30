@@ -10,7 +10,8 @@ class image_texture {
 public:
     // Image bytes are sRGB, so they are decoded to linear once here: shading
     // multiplies light by albedo, which only makes sense in linear color.
-    explicit image_texture(const image8& img) : width(img.width), height(img.height), texels(img.rgb.size()) {
+    explicit image_texture(const image8& img)
+        : source(img), width(img.width), height(img.height), texels(img.rgb.size()) {
         float table[256];
         for (int v = 0; v < 256; ++v) {
             const float c = v / 255.0f;
@@ -29,6 +30,10 @@ public:
         return texel(x0, y0) * ((1 - fx) * (1 - fy)) + texel(x0 + 1, y0) * (fx * (1 - fy)) +
                texel(x0, y0 + 1) * ((1 - fx) * fy) + texel(x0 + 1, y0 + 1) * (fx * fy);
     }
+
+    // The decoded image as it was, sRGB bytes, for the GPU renderer, whose
+    // texture units decode sRGB themselves.
+    const image8 source;
 
 private:
     int width, height;

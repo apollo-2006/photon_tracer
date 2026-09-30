@@ -1,0 +1,45 @@
+#version 460
+// Task shader: one workgroup for up to 64 meshlets of one instance. Each
+// invocation checks one meshlet's bounding sphere against the view frustum
+// and, if the mesh is closed, its normal cone against the camera, and the
+// survivors are handed to mesh shader workgroups, one each.
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+taskPayloadSharedEXT Payload payload;
+shared uint survivors;
+
+void main() {
+    const uint instance = gl_WorkGroupID.y;
+    const uint m = gl_WorkGroupID.x * 64 + gl_LocalInvocationIndex;
+    if (gl_LocalInvocationIndex == 0) {
+        survivors = 0;
+        payload.instance = instance;
+    }
+    barrier();
+
+    bool visible = false;
+    if (m < frame.meshlet_count) {
+        const Meshlet ml = meshlets[m];
+        const Instance inst = instances[instance];
+        const vec3 c = transform_point(inst.to_world, ml.center);
+        const float r = ml.radius * inst.scale;
+        visible = true;
+        for (int k = 0; k < 5; ++k) visible = visible && dot(frame.planes[k].xyz, c) + frame.planes[k].w >= -r;
+        // Every triangle faces away when the view direction lies inside the
+        // cone around the axis: see include/meshlets.hpp.
+        if (visible && (frame.flags & 1u) != 0 && ml.cone_cutoff < 1) {
+            const vec3 axis = normalize(transform_vector(inst.to_world, ml.cone_axis));
+            const vec3 view = c - frame.origin.xyz;
+            const float dist = length(view);
+            if (dot(view, axis) >= ml.cone_cutoff * dist + r) visible = false;
+        }
+    }
+    if (visible) payload.meshlets[atomicAdd(survivors, 1)] = m;
+    barrier();
+    if (gl_LocalInvocationIndex == 0 && survivors > 0) atomicAdd(stats.visible_meshlets, survivors);
+    EmitMeshTasksEXT(survivors, 1, 1);
+}

@@ -1,0 +1,274 @@
+#version 460
+// Path tracing from the visibility buffer. For each pixel, the rasterizer
+// has already found which instance and triangle this sample's camera ray hits
+// first; that one triangle is intersected to recover the exact point, and the
+// path continues from there with ray queries against the acceleration
+// structures (a bottom-level one for the mesh, a top-level one over its
+// instances), plus the analytic ground sphere. The materials, sky and
+// Russian roulette are those of include/renderer.hpp and material.hpp.
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 13) uniform accelerationStructureEXT scene;
+layout(set = 0, binding = 14, rg32ui) uniform readonly uimage2D visibility;
+layout(set = 0, binding = 15, scalar) buffer Accumulated { vec4 accumulated[]; };
+layout(set = 0, binding = 17) uniform sampler2D textures[16];
+
+const float PI = 3.14159265358979;
+const float T_MIN = 0.001;
+const float T_MAX = 1000;
+const int ROULETTE_AFTER = 3;
+
+// PCG hash (O'Neill), one stream per pixel and sample.
+uint rng;
+uint next_u32() {
+    rng = rng * 747796405u + 2891336453u;
+    uint w = ((rng >> ((rng >> 28u) + 4u)) ^ rng) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+float random01() { return float(next_u32() >> 8) * (1.0 / 16777216.0); }
+uint hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du;
+    x ^= x >> 15; x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+vec3 random_in_unit_sphere() {
+    for (;;) {
+        vec3 p = 2 * vec3(random01(), random01(), random01()) - 1;
+        if (dot(p, p) < 1) return p;
+    }
+}
+
+struct Hit {
+    float t;
+    vec3 p;
+    vec3 normal;   // Against the ray
+    bool front;
+    uint material;
+    vec2 uv;
+};
+
+// Fills h from triangle tri of the mesh as placed by instance, given the
+// barycentric coordinates (b1, b2) of the hit and the ray in object space.
+void fill_triangle(uint instance, uint tri, float t, float b1, float b2, vec3 o, vec3 d, vec3 obj_dir, inout Hit h) {
+    const Instance inst = instances[instance];
+    const uint i0 = indices[3 * tri], i1 = indices[3 * tri + 1], i2 = indices[3 * tri + 2];
+    const vec3 p0 = positions[i0], p1 = positions[i1], p2 = positions[i2];
+    const float b0 = 1 - b1 - b2;
+    // Which side was hit comes from the true face, shading from the smooth
+    // normal, as in triangle::fill().
+    const vec3 face = cross(p1 - p0, p2 - p0);
+    h.front = dot(obj_dir, face) < 0;
+    vec3 n = normalize(normals[i0] * b0 + normals[i1] * b1 + normals[i2] * b2);
+    if (!h.front) n = -n;
+    // Normals move by the inverse transpose: the transposed to_object.
+    h.normal = normalize(inst.to_object[0].xyz * n.x + inst.to_object[1].xyz * n.y + inst.to_object[2].xyz * n.z);
+    h.t = t;
+    h.p = o + t * d;
+    h.uv = uvs[i0] * b0 + uvs[i1] * b1 + uvs[i2] * b2;
+    h.material = inst.material != ~0u ? inst.material : triangle_materials[tri];
+}
+
+// The rasterized first hit: triangle tri of instance, which the camera ray
+// is known to hit, intersected again for the exact point. Moller-Trumbore,
+// with the barycentrics clamped, since at a triangle's edge the rasterizer
+// and the arithmetic here can disagree by an ulp.
+void first_hit(uint instance, uint tri, vec3 o, vec3 d, inout Hit h) {
+    const Instance inst = instances[instance];
+    const vec3 lo = transform_point(inst.to_object, o), ld = transform_vector(inst.to_object, d);
+    const vec3 p0 = positions[indices[3 * tri]];
+    const vec3 e1 = positions[indices[3 * tri + 1]] - p0, e2 = positions[indices[3 * tri + 2]] - p0;
+    const vec3 pv = cross(ld, e2);
+    const float inv_det = 1 / dot(e1, pv);
+    const vec3 tv = lo - p0;
+    float b1 = dot(tv, pv) * inv_det;
+    const vec3 qv = cross(tv, e1);
+    float b2 = dot(ld, qv) * inv_det;
+    const float t = dot(e2, qv) * inv_det;
+    b1 = clamp(b1, 0, 1);
+    b2 = clamp(b2, 0, 1 - b1);
+    fill_triangle(instance, tri, t, b1, b2, o, d, ld, h);
+}
+
+// The analytic spheres (the ground), in double: in float, |oc|^2 - r^2 for a
+// radius of 1000 loses what separates a bounce from its own surface, as
+// sphere::intersect<double> explains for the CPU renderer.
+bool hit_spheres(vec3 o, vec3 d, inout Hit h) {
+    bool found = false;
+    for (uint k = 0; k < frame.sphere_count; ++k) {
+        const Sphere s = spheres[k];
+        const dvec3 oc = dvec3(o) - dvec3(s.center), dd = dvec3(d);
+        const double a = dot(dd, dd), half_b = dot(oc, dd), c = dot(oc, oc) - double(s.radius) * double(s.radius);
+        const double disc = half_b * half_b - a * c;
+        if (disc < 0) continue;
+        const double sq = sqrt(disc);
+        double root = (-half_b - sq) / a;
+        if (root < T_MIN || root > h.t) {
+            root = (-half_b + sq) / a;
+            if (root < T_MIN || root > h.t) continue;
+        }
+        h.t = float(root);
+        h.p = o + h.t * d;
+        const vec3 outward = (h.p - s.center) / s.radius;
+        h.front = dot(d, outward) < 0;
+        h.normal = h.front ? outward : -outward;
+        h.material = s.material;
+        h.uv = vec2(0);
+        found = true;
+    }
+    return found;
+}
+
+// The nearest hit along a bounce, through the acceleration structures and
+// the spheres.
+bool trace(vec3 o, vec3 d, inout Hit h) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, scene, gl_RayFlagsOpaqueEXT, 0xFF, o, T_MIN, d, h.t);
+    while (rayQueryProceedEXT(rq)) {}
+    bool found = false;
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        const vec2 b = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        const uint instance = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const vec3 obj_dir = rayQueryGetIntersectionObjectRayDirectionEXT(rq, true);
+        fill_triangle(instance, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionTEXT(rq, true),
+                      b.x, b.y, o, d, obj_dir, h);
+        found = true;
+    }
+    return hit_spheres(o, d, h) || found;
+}
+
+vec3 sky(vec3 d) {
+    const float t = 0.5 * (normalize(d).y + 1);
+    return vec3(1) * (1 - t) + vec3(0.5, 0.7, 1.0) * t;
+}
+
+// A texture lookup done by hand, as image_texture::sample() does it: texels
+// decoded from sRGB exactly, then blended bilinearly in float. The texture
+// units' own filtering and sRGB decoding are coarser, and on Spot's textured
+// cows that showed as a small but steady shift from the CPU renderer's image.
+vec3 srgb_to_linear(vec3 c) {
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+vec3 texel(int t, ivec2 p, ivec2 size) {
+    p = ((p % size) + size) % size;
+    return srgb_to_linear(texelFetch(textures[nonuniformEXT(t)], p, 0).rgb);
+}
+vec3 sample_texture(int t, vec2 uv) {
+    const ivec2 size = textureSize(textures[nonuniformEXT(t)], 0);
+    // v runs up the image, whose rows are stored top first.
+    const float x = fract(uv.x) * size.x - 0.5, y = (1 - fract(uv.y)) * size.y - 0.5;
+    const ivec2 p0 = ivec2(floor(x), floor(y));
+    const float fx = x - p0.x, fy = y - p0.y;
+    return texel(t, p0, size) * ((1 - fx) * (1 - fy)) + texel(t, p0 + ivec2(1, 0), size) * (fx * (1 - fy)) +
+           texel(t, p0 + ivec2(0, 1), size) * ((1 - fx) * fy) + texel(t, p0 + ivec2(1, 1), size) * (fx * fy);
+}
+
+float schlick(float cosine, float ratio) {
+    float r0 = (1 - ratio) / (1 + ratio);
+    r0 *= r0;
+    const float x = 1 - cosine, x2 = x * x;
+    return r0 + (1 - r0) * x2 * x2 * x;
+}
+
+// material::scatter() for each type. False: absorbed.
+bool scatter(Material m, Hit h, vec3 d, out vec3 attenuation, out vec3 dir) {
+    const uint type = uint(m.type);
+    if (type == 0) {  // Matte: cosine-weighted about the normal
+        const float a = random01(), b = random01();
+        const float r = sqrt(a), phi = 2 * PI * b;
+        const vec3 n = h.normal;
+        const float sgn = n.z >= 0 ? 1.0 : -1.0;
+        const float p = -1 / (sgn + n.z), q = n.x * n.y * p;
+        const vec3 t1 = vec3(1 + sgn * n.x * n.x * p, sgn * q, -sgn * n.x);
+        const vec3 t2 = vec3(q, sgn + n.y * n.y * p, -n.y);
+        dir = t1 * (r * cos(phi)) + t2 * (r * sin(phi)) + n * sqrt(max(0.0, 1 - a));
+        attenuation = m.albedo;
+        if (m.texture >= 0) attenuation *= sample_texture(int(m.texture), h.uv);
+        return true;
+    }
+    if (type == 1) {  // Metal: a mirror blurred by fuzz
+        dir = reflect(normalize(d), h.normal) + random_in_unit_sphere() * m.fuzz;
+        attenuation = m.albedo;
+        return dot(dir, h.normal) > 0;
+    }
+    if (type == 2) {  // Glass
+        attenuation = vec3(1);
+        const float ratio = h.front ? 1 / m.ior : m.ior;
+        const vec3 u = normalize(d);
+        const float cos_t = min(dot(-u, h.normal), 1.0), sin_t = sqrt(1 - cos_t * cos_t);
+        const bool reflects = ratio * sin_t > 1 || schlick(cos_t, ratio) > random01();
+        if (reflects) {
+            dir = reflect(u, h.normal);
+        } else {
+            const vec3 perp = (u + h.normal * cos_t) * ratio;
+            dir = perp - h.normal * sqrt(abs(1 - dot(perp, perp)));
+        }
+        return true;
+    }
+    return false;  // A light scatters nothing
+}
+
+void main() {
+    const uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= frame.width || pixel.y >= frame.height) return;
+    rng = hash(pixel.x * 0x9e3779b1u ^ hash(pixel.y ^ hash(sample_pc.index ^ hash(frame.seed))));
+
+    // The camera ray through this sample, as camera::get_ray() makes it:
+    // u across from the left, v up from the bottom row.
+    const uint j = frame.height - 1 - pixel.y;
+    const float u = (float(pixel.x) + sample_pc.jitter.x) / float(frame.width - 1);
+    const float v = (float(j) + sample_pc.jitter.y) / float(frame.height - 1);
+    vec3 o = frame.origin.xyz;
+    vec3 d = frame.corner.xyz + u * frame.across.xyz + v * frame.up.xyz - o;
+
+    vec3 radiance = vec3(0), throughput = vec3(1);
+    uint rays = 0;
+    for (uint bounce = 0; bounce < frame.max_bounces; ++bounce) {
+        ++rays;
+        Hit h;
+        h.t = T_MAX;
+        bool found;
+        if (bounce == 0) {
+            // The rasterizer's answer, then the ground, which it does not draw.
+            const uvec2 id = imageLoad(visibility, ivec2(pixel)).xy;
+            found = id.x != 0;
+            if (found) first_hit(id.x - 1, id.y, o, d, h);
+            found = hit_spheres(o, d, h) || found;
+        } else {
+            found = trace(o, d, h);
+        }
+        if (!found) {
+            radiance += throughput * sky(d);
+            break;
+        }
+        const Material m = materials[h.material];
+        if (h.front) radiance += throughput * m.emission;
+        vec3 attenuation, dir;
+        if (!scatter(m, h, d, attenuation, dir)) break;
+        throughput *= attenuation;
+        o = h.p;
+        d = dir;
+        // Russian roulette, as in ray_color().
+        if (bounce + 1 >= ROULETTE_AFTER) {
+            const float p = max(throughput.x, max(throughput.y, throughput.z));
+            if (p < 1) {
+                if (random01() >= p) break;
+                throughput /= p;
+            }
+        }
+    }
+    const uint index = pixel.y * frame.width + pixel.x;
+    accumulated[index] += vec4(radiance, 1);
+    // One atomic per subgroup rather than per pixel: every invocation adding
+    // to the same counter would serialize.
+    const uint subgroup_rays = subgroupAdd(rays);
+    if (subgroupElect()) atomicAdd(stats.rays, uint64_t(subgroup_rays));
+}

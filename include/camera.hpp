@@ -33,6 +33,14 @@ public:
         lower_left_corner = origin - (horizontal * 0.5) - (vertical * 0.5) - w;
     }
 
+    // The viewport, for the GPU renderer, which rasterizes through the same
+    // mapping: the ray for (u, v) runs from origin toward
+    // corner() + u * across() + v * up().
+    const point3& position() const { return origin; }
+    const point3& corner() const { return lower_left_corner; }
+    const vec3& across() const { return horizontal; }
+    const vec3& up() const { return vertical; }
+
     // Casts a mathematical ray from the origin through a specific UV coordinate on the screen
     ray get_ray(real u, real v) const {
         return ray(origin, lower_left_corner + (horizontal * u) + (vertical * v) - origin);

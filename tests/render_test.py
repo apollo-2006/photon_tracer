@@ -31,6 +31,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REFERENCE = os.path.join(ROOT, "tests", "reference.json")
 BINARY = os.path.join(ROOT, "photon_tracer")
+GPU_BINARY = os.path.join(ROOT, "photon_tracer_gpu")
 
 WIDTH = 960       # 960 x 540
 SPP = 200
@@ -49,7 +50,13 @@ SCENES = {
     # instanced: it must match the instanced crowd's reference, which checks
     # the instance transforms, normals and inverses.
     "crowd, flattened": ["--crowd", "8", "--flatten"],
+    # Spot is closed, so the GPU renderer culls its meshlets by normal cone,
+    # and textured.
+    "spot crowd": ["--crowd", "6", "--obj", "models/spot/spot.obj", "--turn", "150"],
 }
+# What photon_tracer_gpu renders (the crowd only), checked against the same
+# references as the CPU renderer by check --gpu.
+GPU_SCENES = ["crowd", "spot crowd"]
 # Scenes checked against another scene's reference.
 SAME_AS = {"crowd, flattened": "crowd"}
 
@@ -68,8 +75,8 @@ Z_BLOCK, Z_ROW, Z_IMAGE = 10.0, 6.0, 5.0
 SIGMA_FLOOR = 2e-4
 
 
-def render(scene, seed, path, extra=()):
-    cmd = [BINARY, *SCENES[scene], "--width", str(WIDTH), "--spp", str(SPP),
+def render(scene, seed, path, extra=(), binary=BINARY):
+    cmd = [binary, *SCENES[scene], "--width", str(WIDTH), "--spp", str(SPP),
            "--seed", str(seed), "--out", path, *extra]
     subprocess.run(cmd, cwd=ROOT, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -137,9 +144,9 @@ def make_reference(args):
     print(f"wrote {os.path.relpath(REFERENCE, ROOT)}")
 
 
-def check_scene(scene, data, tmp, seed):
+def check_scene(scene, data, tmp, seed, binary=BINARY):
     path = os.path.join(tmp, f"{scene}.pfm")
-    render(scene, seed, path)
+    render(scene, seed, path, binary=binary)
     bw, bh, means = block_means(path)
     assert [bw, bh] == data["blocks"], "block grid differs from the reference"
     # The reference mean is itself an average of SEEDS renders, so it carries
@@ -193,6 +200,12 @@ def check(args):
         sys.exit("tests/reference.json was made with other settings; run: tests/render_test.py reference")
     ok = True
     with tempfile.TemporaryDirectory() as tmp:
+        if args.gpu:
+            if not os.path.exists(GPU_BINARY):
+                sys.exit("build first: make gpu")
+            for scene in args.scenes:
+                ok &= check_scene(scene, ref["scenes"][SAME_AS.get(scene, scene)], tmp, args.seed, GPU_BINARY)
+            sys.exit(0 if ok else 1)
         ok &= check_seed_is_reproducible(tmp)
         for scene in args.scenes:
             ok &= check_scene(scene, ref["scenes"][SAME_AS.get(scene, scene)], tmp, args.seed)
@@ -205,8 +218,10 @@ def main():
     parser.add_argument("--scene", action="append", dest="scenes", choices=list(SCENES),
                         help="only this scene (repeatable); default all")
     parser.add_argument("--seed", type=int, default=CHECK_SEED, help="seed for check renders")
+    parser.add_argument("--gpu", action="store_true",
+                        help="check photon_tracer_gpu against the CPU renderer's references")
     args = parser.parse_args()
-    args.scenes = args.scenes or list(SCENES)
+    args.scenes = args.scenes or (GPU_SCENES if args.gpu else list(SCENES))
     if not os.path.exists(BINARY):
         sys.exit("build first: make")
     (make_reference if args.command == "reference" else check)(args)

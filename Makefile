@@ -23,6 +23,26 @@ $(OBJ_DIR):
 
 -include $(OBJS:.o=.d)
 
+# The GPU renderer (gpu/): mesh shaders and ray queries on Vulkan. Needs the
+# Vulkan headers and loader, and glslc to compile the shaders, whose SPIR-V is
+# built into the program.
+GPU_SHADERS = $(wildcard gpu/shaders/*.task gpu/shaders/*.mesh gpu/shaders/*.frag gpu/shaders/*.comp)
+GPU_SPIRV = $(patsubst gpu/shaders/%,$(OBJ_DIR)/shaders/%.inc,$(GPU_SHADERS))
+
+$(OBJ_DIR)/shaders/%.inc: gpu/shaders/% gpu/shaders/common.glsl
+	@mkdir -p $(OBJ_DIR)/shaders
+	glslc --target-env=vulkan1.3 -O -mfmt=num -o $@ $<
+
+photon_tracer_gpu: gpu/main.cpp gpu/vk.hpp $(GPU_SPIRV) $(wildcard include/*.hpp)
+	$(CXX) $(CXXFLAGS) -Wno-missing-field-initializers $(INCLUDES) -Igpu -I$(OBJ_DIR)/shaders gpu/main.cpp -o $@ -lvulkan
+
+gpu: photon_tracer_gpu
+
+# The GPU renderer's images against the CPU renderer's references. Needs a GPU
+# with mesh shaders and ray queries, so CI does not run it.
+test-gpu: photon_tracer_gpu
+	python3 tests/render_test.py check --gpu
+
 # Unit tests for the OBJ reader, the meshlet builder and the PNG decoder, then the render
 # regression tests (tests/render_test.py).
 tests/obj_test: tests/obj_test.cpp $(wildcard include/*.hpp)
@@ -41,6 +61,6 @@ test: $(TARGET) tests/obj_test tests/meshlet_test tests/decode_image
 	python3 tests/render_test.py check
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET) render.ppm tests/obj_test tests/meshlet_test tests/decode_image
+	rm -rf $(OBJ_DIR) $(TARGET) photon_tracer_gpu render.ppm tests/obj_test tests/meshlet_test tests/decode_image
 
-.PHONY: all clean test
+.PHONY: all clean test gpu test-gpu

@@ -1,3 +1,4 @@
+#include "image_write.hpp"
 #include "renderer.hpp"
 
 #include <atomic>
@@ -186,31 +187,9 @@ int main(int argc, char** argv) {
         denoise_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     }
 
-    // 7. Output to File. Binary PPM (P6): the header, then the bytes as they
-    // are. The ASCII form (P3) was four times the size and, once rendering got
-    // fast, a fifth of the whole run. A path ending in .pfm gets the linear
-    // floats instead, as a Portable Float Map, for the render tests: averaging
-    // after gamma and clamping would bias noisy pixels.
+    // 7. Output to File (image_write.hpp).
     std::cerr << "\nWriting to " << out_path << "...\n";
-    std::ofstream out(out_path, std::ios::binary);
-    if (!out) {
-        std::cerr << "Failed to open " << out_path << " for writing.\n";
-        return 1;
-    }
-    const bool pfm = out_path.size() >= 4 && out_path.compare(out_path.size() - 4, 4, ".pfm") == 0;
-    if (pfm) {
-        // -1: little-endian floats. PFM stores the bottom row first.
-        out << "PF\n" << image_width << ' ' << image_height << "\n-1.0\n";
-        for (int y = image_height - 1; y >= 0; --y)
-            out.write(reinterpret_cast<const char*>(&image[3 * static_cast<size_t>(y) * image_width]),
-                      static_cast<std::streamsize>(3 * sizeof(float) * image_width));
-    } else {
-        std::vector<uint8_t> bytes(image.size());
-        for (size_t c = 0; c < image.size(); ++c) bytes[c] = to_display(image[c]);
-        out << "P6\n" << image_width << ' ' << image_height << "\n255\n";
-        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    }
-    if (!out) {
+    if (!write_image(out_path, image_width, image_height, image.data())) {
         std::cerr << "Failed to write " << out_path << ".\n";
         return 1;
     }
