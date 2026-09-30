@@ -39,6 +39,10 @@ function render() {
   const scene = Number($('scene').value), bvh = $('bvh').value === '1';
   const n = Number($('threads').value), bands = $('sched').value === 'bands';
   const passes = passSizes(spp, $('prog').value === '1');
+  // Samples taken before each pass, so each pass draws new ones, and one seed
+  // for the whole render, shared by every worker.
+  const firstSample = passes.map((_, p) => passes.slice(0, p).reduce((a, b) => a + b, 0));
+  const seed = Math.floor(Math.random() * 2 ** 52);
   ensurePool(n);
 
   const canvas = $('out');
@@ -81,7 +85,7 @@ function render() {
   for (let w = 0; w < n; w++) bars.append(document.createElement('div'));
 
   const send = (worker, unit) => {
-    if (unit) worker.postMessage({ j: unit[0], width, height, spp: passes[unit[1]], bounces, scene, bvh });
+    if (unit) worker.postMessage({ j: unit[0], width, height, spp: passes[unit[1]], first: firstSample[unit[1]], seed, bounces, scene, bvh });
   };
 
   pool.forEach((worker, w) => {

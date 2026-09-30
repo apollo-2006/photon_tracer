@@ -16,7 +16,9 @@ int main(int argc, char** argv) {
     // Flags: --field for the 400-sphere scene, --mesh for the teapot (or
     // --obj PATH for another model in its place), --bvh or --no-bvh to force the
     // BVH on or off (for comparing the two), --spp N to change the sample count, --threads N
-    // to use fewer than every hardware thread.
+    // to use fewer than every hardware thread, --width N for a smaller or larger
+    // 16:9 image, --out PATH to write somewhere other than render.ppm, and
+    // --seed N to render the same image every time.
     // By default the BVH is used for the field and the mesh: on the five-sphere scene
     // the ground sphere's box covers nearly every ray and the tree is overhead.
     scene_id scene = scene_id::materials;
@@ -24,6 +26,9 @@ int main(int argc, char** argv) {
     std::string obj_path = "models/teapot.obj";
     int spp = 50;
     int threads_flag = 0;
+    int image_width = 1920;
+    std::string out_path = "render.ppm";
+    uint64_t seed = (uint64_t(std::random_device{}()) << 32) ^ std::random_device{}();
     for (int a = 1; a < argc; ++a) {
         std::string arg = argv[a];
         if (arg == "--field") scene = scene_id::field;
@@ -33,8 +38,12 @@ int main(int argc, char** argv) {
         else if (arg == "--no-bvh") bvh_flag = 0;
         else if (arg == "--spp" && a + 1 < argc) spp = std::stoi(argv[++a]);
         else if (arg == "--threads" && a + 1 < argc) threads_flag = std::stoi(argv[++a]);
+        else if (arg == "--width" && a + 1 < argc) image_width = std::stoi(argv[++a]);
+        else if (arg == "--out" && a + 1 < argc) out_path = argv[++a];
+        else if (arg == "--seed" && a + 1 < argc) seed = std::stoull(argv[++a]);
         else {
-            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH] [--bvh|--no-bvh] [--spp N] [--threads N]\n";
+            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH] [--bvh|--no-bvh] [--spp N]"
+                      << " [--threads N] [--width N] [--out PATH] [--seed N]\n";
             return 2;
         }
     }
@@ -55,7 +64,6 @@ int main(int argc, char** argv) {
 
     // 1. Image Settings
     const double aspect_ratio = 16.0 / 9.0;
-    const int image_width = 1920;
     const int image_height = static_cast<int>(image_width / aspect_ratio);
     const int samples_per_pixel = spp; // Anti-aliasing quality
     const int max_bounces = 10;
@@ -90,7 +98,7 @@ int main(int argc, char** argv) {
         for (int j = next_row.fetch_add(1); j < image_height; j = next_row.fetch_add(1)) {
             // j counts up from the bottom; the file is written top row first.
             render_row(world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
-                       &image[3 * (image_height - 1 - j) * image_width]);
+                       &image[3 * (image_height - 1 - j) * image_width], seed);
 
             std::lock_guard<std::mutex> lock(progress_mutex);
             rows_completed++;
@@ -111,18 +119,17 @@ int main(int argc, char** argv) {
     const double render_s =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - render_start).count();
 
-    // 7. Output to File
-    std::cerr << "\nWriting to render.ppm...\n";
-    std::ofstream out("render.ppm");
+    // 7. Output to File. Binary PPM (P6): the header, then the bytes as they
+    // are. The ASCII form (P3) was four times the size and, once rendering got
+    // fast, a fifth of the whole run.
+    std::cerr << "\nWriting to " << out_path << "...\n";
+    std::ofstream out(out_path, std::ios::binary);
     if (!out) {
-        std::cerr << "Failed to open render.ppm for writing.\n";
+        std::cerr << "Failed to open " << out_path << " for writing.\n";
         return 1;
     }
-    out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
-
-    for (size_t p = 0; p < image.size(); p += 3) {
-        out << int(image[p]) << ' ' << int(image[p + 1]) << ' ' << int(image[p + 2]) << '\n';
-    }
+    out << "P6\n" << image_width << ' ' << image_height << "\n255\n";
+    out.write(reinterpret_cast<const char*>(image.data()), static_cast<std::streamsize>(image.size()));
 
     std::cerr << "Render Complete.\n";
     std::cerr << image_width << "x" << image_height << " at " << samples_per_pixel
@@ -130,6 +137,6 @@ int main(int argc, char** argv) {
               << std::setprecision(3) << total_rays / render_s / 1e6 << std::setprecision(6) << "M rays/s ("
               << total_rays << " rays) on " << num_threads << " threads, "
               << (scene == scene_id::field ? "field" : scene == scene_id::mesh ? "mesh" : "materials") << " scene, "
-              << (use_bvh ? "BVH" : "no BVH") << '\n';
+              << (use_bvh ? "BVH" : "no BVH") << ", seed " << seed << '\n';
     return 0;
 }

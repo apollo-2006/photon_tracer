@@ -12,6 +12,8 @@ geometry world = build_world(scene_id::materials, false);
 camera cam;
 std::vector<float> row;
 std::string obj_text;  // The mesh scene's model, written in by the page
+// One per render, from the page, so every worker draws from the same streams.
+uint64_t seed = 0;
 }
 
 extern "C" {
@@ -23,6 +25,8 @@ EMSCRIPTEN_KEEPALIVE char* obj_buffer(int len) {
     return obj_text.data();
 }
 
+EMSCRIPTEN_KEEPALIVE void set_seed(double s) { seed = static_cast<uint64_t>(s); }
+
 // Switch scene, and between the BVH and the plain list.
 EMSCRIPTEN_KEEPALIVE void set_scene(int scene, int use_bvh) {
     const scene_id id = static_cast<scene_id>(scene);
@@ -32,9 +36,11 @@ EMSCRIPTEN_KEEPALIVE void set_scene(int scene, int use_bvh) {
 
 // Linear RGB floats, the average of spp samples; the page accumulates passes
 // and applies gamma itself.
-EMSCRIPTEN_KEEPALIVE float* trace_row(int j, int width, int height, int spp, int bounces) {
+// first_sample is how many samples earlier passes took of this row, so each
+// pass draws new ones.
+EMSCRIPTEN_KEEPALIVE float* trace_row(int j, int width, int height, int spp, int bounces, int first_sample) {
     row.resize(3 * static_cast<size_t>(width));
-    render_row_linear(world, cam, j, width, height, spp, bounces, row.data());
+    render_row_linear(world, cam, j, width, height, spp, bounces, row.data(), seed, first_sample);
     return row.data();
 }
 

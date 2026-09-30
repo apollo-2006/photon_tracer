@@ -129,11 +129,22 @@ inline geometry build_world(scene_id id, bool use_bvh, const std::string& obj_te
     return world;
 }
 
+// Seeds this thread's RNG for row j's samples from first_sample on. Every
+// (seed, row, first sample) gets its own stream, so a render with a given seed
+// comes out the same however its rows are shared between threads, and each
+// progressive pass over a row draws new samples rather than repeating one.
+inline void seed_row(uint64_t seed, int j, int first_sample) {
+    thread_rng.seed(seed ^ ((uint64_t(uint32_t(j)) << 32) | uint32_t(first_sample)));
+}
+
 // Trace one scanline, where j counts up from the bottom of the image, and write
-// width linear RGB floats to out: the average of samples_per_pixel samples.
-// The browser demo accumulates these over progressive passes.
+// width linear RGB floats to out: the average of samples_per_pixel samples,
+// numbered from first_sample. The browser demo accumulates these over
+// progressive passes.
 inline void render_row_linear(const geometry& world, const camera& cam, int j, int width, int height,
-                              int samples_per_pixel, int max_bounces, float* out) {
+                              int samples_per_pixel, int max_bounces, float* out, uint64_t seed,
+                              int first_sample = 0) {
+    seed_row(seed, j, first_sample);
     const real scale = real(1) / samples_per_pixel;
     for (int i = 0; i < width; ++i) {
         color pixel_color(0, 0, 0);
@@ -153,10 +164,10 @@ inline void render_row_linear(const geometry& world, const camera& cam, int j, i
 
 // The same scanline as width RGB bytes: gamma 2.0, then quantized.
 inline void render_row(const geometry& world, const camera& cam, int j, int width, int height,
-                       int samples_per_pixel, int max_bounces, uint8_t* out) {
+                       int samples_per_pixel, int max_bounces, uint8_t* out, uint64_t seed) {
     thread_local std::vector<float> linear;
     linear.resize(3 * static_cast<size_t>(width));
-    render_row_linear(world, cam, j, width, height, samples_per_pixel, max_bounces, linear.data());
+    render_row_linear(world, cam, j, width, height, samples_per_pixel, max_bounces, linear.data(), seed);
 
     // Gamma correction. Taking the square root is gamma 2.0, not 2.2: an
     // approximation of sRGB that is close enough by eye and one instruction

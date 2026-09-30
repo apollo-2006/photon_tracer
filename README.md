@@ -61,7 +61,11 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   top of the frame is sky (one miss per sample) and the bottom is ground (several
   bounces), so fixed bands leave the sky threads idle. The RNG (xoshiro256+) and the ray
   counter are `thread_local`, so workers never contend on them.
-* **PPM output.** Written as plain ASCII P3 with no image library involved.
+* **PPM output.** Written as binary P6, a short text header and then the pixel bytes,
+  with no image library involved.
+* **Reproducible renders.** Each row's random numbers are seeded from the render's seed,
+  the row and the sample number, so the same `--seed` gives the same image, byte for
+  byte, however many threads render it.
 
 ## Scene
 
@@ -96,9 +100,11 @@ make
 ./photon_tracer --obj model.obj     # your own model in the teapot's place
 ./photon_tracer --spp 10            # fewer samples per pixel
 ./photon_tracer --threads 8         # fewer than every hardware thread
+./photon_tracer --width 480         # a smaller 16:9 image
+./photon_tracer --seed 7 --out a.ppm  # the same image every time, written to a.ppm
 ```
 
-Renders 1920x1080 at 50 samples per pixel. The output is a ~24 MB ASCII PPM; most image
+Renders 1920x1080 at 50 samples per pixel. The output is a 6 MB binary PPM; most image
 viewers open it directly, or convert it with `magick render.ppm render.png`.
 
 The BVH is on by default for the field and the mesh and off for the five-sphere scene, where
@@ -117,7 +123,7 @@ threads), g++ 16 `-O3`, 1920x1080, 50 samples per pixel, up to 10 bounces, best 
 | render | **0.49 s** |
 | rays traced | 184.6M (103.7M primary, the rest bounces) |
 | throughput | **~375M rays/s** |
-| whole run, including the 24 MB PPM write | 0.64 s |
+| whole run, including the PPM write (then 24 MB of ASCII P3) | 0.64 s |
 
 Handing out rows from a shared counter instead of fixed bands took the whole run from
 0.98 s to 0.67 s on the same machine, with identical output statistics. CPU time went up
