@@ -78,21 +78,38 @@ inline geometry make_scene(scene_id id = scene_id::materials) {
     world.spheres.emplace_back(point3( 1,    0.0, -1),   0.5, gold);
     if (id != scene_id::field) return world;
 
-    // Fixed seed: the same field in every build and every worker.
+    // Fixed seed: the same field in every build and every worker. Each number
+    // is drawn into its own variable, in order: C++ leaves the order of
+    // function arguments unspecified, and color(u() * u(), ...) came out as a
+    // different field under GCC (native) and clang (the WebAssembly demo). The
+    // conversion to [0, 1) is spelled out for the same reason, since
+    // std::uniform_real_distribution comes from a different standard library
+    // in each build.
     std::mt19937 rng(7);
-    std::uniform_real_distribution<double> u(0.0, 1.0);
+    auto u = [&rng] { return rng() * 0x1.0p-32; };
     // A 30 x 14 grid close to the camera, which sits only 0.5 above the ground,
     // so the far rows bunch up toward the horizon.
     for (int a = -15; a < 15; ++a) {
         for (int b = -15; b < -1; ++b) {
-            point3 c(a * 0.2 + 0.12 * u(rng), -0.44, b * 0.2 + 0.12 * u(rng));
+            const double jitter_x = u();
+            const double jitter_z = u();
+            point3 c(a * 0.2 + 0.12 * jitter_x, -0.44, b * 0.2 + 0.12 * jitter_z);
             vec3 d = c - point3(clamp(std::round(c.x()), -1.0, 1.0), -0.44, -1);
             if (vec3::dot(d, d) < 0.36) continue;  // Clear of the big three
-            double pick = u(rng);
+            const double pick = u();
             const material* m;
-            if (pick < 0.7)      m = world.own(std::make_shared<lambertian>(color(u(rng) * u(rng), u(rng) * u(rng), u(rng) * u(rng))));
-            else if (pick < 0.9) m = world.own(std::make_shared<metal>(color(0.5 + 0.5 * u(rng), 0.5 + 0.5 * u(rng), 0.5 + 0.5 * u(rng)), 0.3 * u(rng)));
-            else                 m = glass;
+            if (pick < 0.7) {
+                double albedo[3];
+                for (double& x : albedo) { x = u(); x *= u(); }
+                m = world.own(std::make_shared<lambertian>(color(albedo[0], albedo[1], albedo[2])));
+            } else if (pick < 0.9) {
+                double albedo[3];
+                for (double& x : albedo) x = 0.5 + 0.5 * u();
+                const double fuzz = 0.3 * u();
+                m = world.own(std::make_shared<metal>(color(albedo[0], albedo[1], albedo[2]), fuzz));
+            } else {
+                m = glass;
+            }
             world.spheres.emplace_back(c, 0.06, m);
         }
     }
