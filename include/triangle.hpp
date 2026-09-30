@@ -18,6 +18,10 @@ public:
     vec3 face_normal;
     const material* mat;
     real uv[6] = {0, 0, 0, 0, 0, 0};  // Texture coordinates at the three corners
+    // The second and third corners exactly as given: p0 + e1 can be an ulp
+    // off, which would split a vertex two triangles share when the mesh is
+    // indexed again (meshlets.hpp).
+    point3 p1, p2;
 
     // Flat shaded: every vertex normal is the face normal.
     triangle(point3 a, point3 b, point3 c, const material* m)
@@ -26,7 +30,7 @@ public:
     }
 
     triangle(point3 a, point3 b, point3 c, vec3 na, vec3 nb, vec3 nc, const material* m)
-        : p0(a), e1(b - a), e2(c - a), n0(na), n1(nb), n2(nc), mat(m) {
+        : p0(a), e1(b - a), e2(c - a), n0(na), n1(nb), n2(nc), mat(m), p1(b), p2(c) {
         face_normal = cross(e1, e2).normalize();
     }
 
@@ -70,7 +74,6 @@ public:
     }
 
     aabb bounding_box() const {
-        point3 p1 = p0 + e1, p2 = p0 + e2;
         const real pad = real(1e-4);  // A flat, axis-aligned face would have a zero-width box
         point3 lo(std::min({p0.x(), p1.x(), p2.x()}) - pad, std::min({p0.y(), p1.y(), p2.y()}) - pad,
                   std::min({p0.z(), p1.z(), p2.z()}) - pad);

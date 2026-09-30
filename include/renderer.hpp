@@ -318,7 +318,7 @@ inline geometry make_crowd_scene(const std::string& obj_text, const file_reader&
             }
             const affine to_object = place.inverse();
             for (const triangle& t : model) {
-                const point3 a = place.point(t.p0), b = place.point(t.p0 + t.e1), cc = place.point(t.p0 + t.e2);
+                const point3 a = place.point(t.p0), b = place.point(t.p1), cc = place.point(t.p2);
                 auto n = [&](const vec3& v) { return to_object.transposed(v).normalize(); };
                 triangle w(a, b, cc, n(t.n0), n(t.n1), n(t.n2), m ? m : t.mat);
                 std::copy(t.uv, t.uv + 6, w.uv);

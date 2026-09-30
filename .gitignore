@@ -67,3 +67,4 @@ web/dist/
 /models/happy.obj
 /models/xyzrgb_dragon.obj
 /models/*.obj.part
+/tests/meshlet_test
