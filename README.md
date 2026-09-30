@@ -62,8 +62,17 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   the ground sphere's intersection, which is `double`: in `float`, `|oc|^2 - r^2` for a
   sphere of radius 100 loses the few thousandths that separate a bounce from the surface
   it left, and the ground came out slightly darker.
-* **Anti-aliasing by supersampling.** 50 rays per pixel, each jittered by a random
-  sub-pixel offset, averaged. This is what removes the stair-stepping on sphere edges.
+* **Anti-aliasing by supersampling.** 50 rays per pixel, each jittered by a sub-pixel
+  offset, averaged. This is what removes the stair-stepping on sphere edges.
+* **Well-spread samples.** The pixel offset, the direction of each matte bounce and the
+  point aimed at on a light come, for the first two bounces, from shuffled Owen-scrambled
+  Sobol points (`sampler.hpp`, after Burley 2020) rather than independent random
+  numbers, so each new sample lands where earlier ones left room. Scrambling is per pixel
+  and per dimension pair, and the sequence is indexed by each pixel's sample number, so
+  progressive passes continue it. At 16 samples per pixel it cuts error against a
+  converged image by about 17% on the materials and teapot scenes for 8-10% more time,
+  about 1.3x less time for the same error. The room gains little (3-4%): most of its noise
+  is caustics under the glass, which only bounces that find the lamp can light.
 * **Gamma correction.** Output is square-rooted before writing, an approximation of sRGB
   that keeps midtones from looking too dark.
 * **Multithreaded.** One worker per hardware thread, each claiming the next unrendered row

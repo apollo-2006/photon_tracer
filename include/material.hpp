@@ -2,6 +2,7 @@
 // Surface materials. Each one decides, for a ray that hit it, whether the ray
 // scatters, in which direction, and how much of each color channel survives.
 #include "hittable.hpp"
+#include "sampler.hpp"
 #include "vec3.hpp"
 
 #include <cmath>
@@ -42,10 +43,22 @@ public:
 
     explicit lambertian(const color& a) : albedo(a) { diffuse = true; }
 
+    // Cosine-weighted directions around the normal, drawn from two numbers so
+    // that they can come from the path's well-spread sample pairs
+    // (sampler.hpp). The same distribution as the normal plus a random unit
+    // vector, which needed rejection sampling to find that vector.
     bool scatter(const ray&, const hit_record& rec, color& attenuation, ray& scattered) const override {
-        vec3 direction = rec.normal + random_in_unit_sphere().normalize();
-        // The random vector can cancel the normal almost exactly.
-        if (vec3::dot(direction, direction) < real(1e-16)) direction = rec.normal;
+        real a, b;
+        sample_2d(0, a, b);
+        const real r = std::sqrt(a), phi = 2 * real(M_PI) * b;
+        const vec3& n = rec.normal;
+        // Any two directions perpendicular to n and to each other (Duff et al. 2017).
+        const real sign = std::copysign(real(1), n.z());
+        const real p = -1 / (sign + n.z()), q = n.x() * n.y() * p;
+        const vec3 t1(1 + sign * n.x() * n.x() * p, sign * q, -sign * n.x());
+        const vec3 t2(q, sign + n.y() * n.y() * p, -n.y());
+        const vec3 direction = t1 * (r * std::cos(phi)) + t2 * (r * std::sin(phi)) +
+                               n * std::sqrt(std::fmax(real(0), 1 - a));
         scattered = ray(rec.p, direction);
         attenuation = albedo;
         return true;

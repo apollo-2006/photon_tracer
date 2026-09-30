@@ -55,9 +55,11 @@ inline color direct_light(const geometry& world, const hit_record& rec) {
     const vec3 w = to_center / std::sqrt(dist2);
     const vec3 a = std::fabs(w.x()) > real(0.9) ? vec3(0, 1, 0) : vec3(1, 0, 0);
     const vec3 u = cross(w, a).normalize(), v = cross(w, u);
-    const real cos_t = 1 - random_real() * one_minus_cos_max;
+    real s1, s2;
+    sample_2d(1, s1, s2);
+    const real cos_t = 1 - s1 * one_minus_cos_max;
     const real sin_t = std::sqrt(std::fmax(real(0), 1 - cos_t * cos_t));
-    const real phi = 2 * real(M_PI) * random_real();
+    const real phi = 2 * real(M_PI) * s2;
     const vec3 dir = u * (std::cos(phi) * sin_t) + v * (std::sin(phi) * sin_t) + w * cos_t;
 
     const real cos_surface = vec3::dot(dir, rec.normal);
@@ -86,6 +88,7 @@ inline color ray_color(ray r, const geometry& world, int depth) {
     bool sampled = false;
     for (int bounce = 0; bounce < depth; ++bounce) {
         ++rays_traced;
+        set_bounce(bounce);
 
         hit_record rec;
         if (!world.hit(r, real(0.001), 1000, rec)) return radiance + throughput * background(world, r);
@@ -269,8 +272,11 @@ inline void render_row_linear(const geometry& world, const camera& cam, int j, i
 
         // Anti-Aliasing Loop: Shoot multiple rays with slight random offsets
         for (int s = 0; s < samples_per_pixel; ++s) {
-            real u = (i + random_real()) / (width - 1);
-            real v = (j + random_real()) / (height - 1);
+            begin_sample(seed, i, j, static_cast<uint32_t>(first_sample + s));
+            real du, dv;
+            sample_2d(0, du, dv);
+            real u = (i + du) / (width - 1);
+            real v = (j + dv) / (height - 1);
             ray r = cam.get_ray(u, v);
             pixel_color = pixel_color + ray_color(r, world, max_bounces);
         }
