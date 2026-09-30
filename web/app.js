@@ -3,6 +3,9 @@
 const $ = (id) => document.getElementById(id);
 const cores = navigator.hardwareConcurrency || 4;
 let pool = [], job = null;
+// The denoiser runs in its own worker (denoise.js), kept across renders.
+// denoiseFor is the render whose frames it may still show.
+let denoiser = null, denoiseFor = null, denoiseSeq = 0;
 
 $('threads').max = Math.max(2, cores);
 $('threads').value = Math.max(1, cores);
@@ -39,6 +42,7 @@ function render() {
   const scene = Number($('scene').value), bvh = $('bvh').value === '1';
   const n = Number($('threads').value), bands = $('sched').value === 'bands';
   const passes = passSizes(spp, $('prog').value === '1');
+  const denoising = $('denoise').value === '1';
   // Samples taken before each pass, so each pass draws new ones, and one seed
   // for the whole render, shared by every worker.
   const firstSample = passes.map((_, p) => passes.slice(0, p).reduce((a, b) => a + b, 0));
@@ -64,6 +68,65 @@ function render() {
   // Linear color summed over every sample so far, and the sample count, per row.
   const sum = new Float32Array(3 * width * height), count = new Uint16Array(height);
   const total = height * passes.length;
+
+  // For the denoiser, summed the same way: each pixel's first-hit albedo and
+  // normal and its squared luminance, from which its noise follows.
+  const px = width * height;
+  const albedoSum = denoising ? new Float32Array(3 * px) : null;
+  const normalSum = denoising ? new Float32Array(3 * px) : null;
+  const lum2Sum = denoising ? new Float32Array(px) : null;
+  const passRows = new Array(passes.length).fill(0);
+  // Once a denoised frame has been drawn, noisy rows are no longer painted
+  // over it; the next denoised frame replaces it.
+  let showDenoised = false, denoiseBusy = false, denoisePending = false;
+  const token = {};
+  denoiseFor = token;
+  const lum = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+  const requestDenoise = () => {
+    if (denoiseBusy) { denoisePending = true; return; }
+    denoiseBusy = true; denoisePending = false;
+    const id = ++denoiseSeq;
+    const color = new Float32Array(3 * px), albedo = new Float32Array(3 * px);
+    const normal = new Float32Array(3 * px), variance = new Float32Array(px);
+    for (let j = 0; j < height; j++) {
+      const k = count[j];
+      if (!k) continue;  // Not reached yet: black, and the filter keeps it apart
+      for (let i = 0; i < width; i++) {
+        const p = j * width + i;
+        for (let c = 0; c < 3; c++) {
+          color[3 * p + c] = sum[3 * p + c] / k;
+          albedo[3 * p + c] = albedoSum[3 * p + c] / k;
+          normal[3 * p + c] = normalSum[3 * p + c] / k;
+        }
+        const l = lum(color[3 * p], color[3 * p + 1], color[3 * p + 2]);
+        // Variance of the mean: that of one sample over the sample count.
+        variance[p] = (lum2Sum[p] / k - l * l) / k;
+      }
+    }
+    denoiser = denoiser || new Worker('denoise.js');
+    denoiser.onmessage = ({ data }) => {
+      // A reply to an earlier render, or to a request since superseded.
+      if (denoiseFor !== token || data.id !== id) return;
+      denoiseBusy = false;
+      // Rows are stored bottom first, as j counts; the canvas is top first.
+      for (let j = 0; j < height; j++) {
+        const out = 4 * width * (height - 1 - j);
+        for (let i = 0; i < 3 * width; i++) {
+          const v = 256 * Math.min(Math.sqrt(Math.max(data.out[3 * width * j + i], 0)), 0.999);
+          image.data[out + 4 * Math.floor(i / 3) + (i % 3)] = v;
+        }
+        for (let i = 0; i < width; i++) image.data[out + 4 * i + 3] = 255;
+      }
+      showDenoised = true;
+      ctx.putImageData(image, 0, 0);
+      if (denoisePending) requestDenoise();
+      else if (passRows[passes.length - 1] === height) $('sRows').textContent = `pass ${passes.length}/${passes.length}, denoised in ${Math.round(data.ms)} ms`;
+    };
+    denoiser.postMessage({ id, width, height, color, albedo, normal, variance },
+                         [color.buffer, albedo.buffer, normal.buffer, variance.buffer]);
+  };
+
   job = { height, total, passes: passes.length, next: 0, done: 0, rays: 0, start: performance.now(), perWorker: new Array(n).fill(0), live: true };
   const rowsPerBand = Math.floor(height / n);
   const bandStart = pool.map((_, w) => w * rowsPerBand);
@@ -85,7 +148,7 @@ function render() {
   for (let w = 0; w < n; w++) bars.append(document.createElement('div'));
 
   const send = (worker, unit) => {
-    if (unit) worker.postMessage({ j: unit[0], width, height, spp: passes[unit[1]], first: firstSample[unit[1]], seed, bounces, scene, bvh });
+    if (unit) worker.postMessage({ j: unit[0], pass: unit[1], width, height, spp: passes[unit[1]], first: firstSample[unit[1]], seed, bounces, scene, bvh, aux: denoising });
   };
 
   pool.forEach((worker, w) => {
@@ -100,12 +163,23 @@ function render() {
       for (let i = 0; i < width; i++) {
         for (let c = 0; c < 3; c++) {
           sum[base + 3 * i + c] += data.pixels[3 * i + c] * data.spp;
-          // Gamma 2.0, as in render_row().
-          image.data[out + 4 * i + c] = 256 * Math.min(Math.sqrt(sum[base + 3 * i + c] * scale), 0.999);
+          // Gamma 2.0, as in to_display().
+          if (!showDenoised) image.data[out + 4 * i + c] = 256 * Math.min(Math.sqrt(sum[base + 3 * i + c] * scale), 0.999);
         }
         image.data[out + 4 * i + 3] = 255;
       }
-      dirtyTop = Math.min(dirtyTop, y); dirtyBottom = Math.max(dirtyBottom, y);
+      if (denoising) {
+        const g = data.guide, p0 = width * data.j;
+        for (let i = 0; i < width; i++) {
+          for (let c = 0; c < 3; c++) {
+            albedoSum[3 * (p0 + i) + c] += g[7 * i + c] * data.spp;
+            normalSum[3 * (p0 + i) + c] += g[7 * i + 3 + c] * data.spp;
+          }
+          lum2Sum[p0 + i] += g[7 * i + 6] * data.spp;
+        }
+        if (++passRows[data.pass] === height) requestDenoise();
+      }
+      if (!showDenoised) { dirtyTop = Math.min(dirtyTop, y); dirtyBottom = Math.max(dirtyBottom, y); }
       current.done++; current.rays += data.rays; current.perWorker[w]++;
       if (current.done === current.total) { draw(); finish(current); return; }
       if (!drawQueued) {
@@ -143,6 +217,7 @@ function finish(j) {
 }
 
 function stop() {
+  denoiseFor = null;
   if (!job) return;
   job.live = false;
   pool.forEach((w) => w.terminate());

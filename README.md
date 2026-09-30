@@ -73,6 +73,17 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   converged image by about 17% on the materials and teapot scenes for 8-10% more time,
   about 1.3x less time for the same error. The room gains little (3-4%): most of its noise
   is caustics under the glass, which only bounces that find the lamp can light.
+* **Denoising.** `--denoise` (and the demo's denoise switch, on by default) filters the
+  image with an edge-avoiding a-trous wavelet filter steered by each pixel's noise, as in
+  SVGF (`denoise.hpp`). Alongside its color, each pixel records the albedo and normal of
+  what its rays first hit and its mean squared luminance. The filter divides the albedo
+  out, blurs the remaining lighting over five passes of a 5x5 kernel spreading from 1 to
+  16 pixels, weights each tap down where normals turn, albedo changes, or brightness
+  differs by more than the pixel's noise explains, then multiplies the albedo back in. On
+  the room at 16 samples per pixel it cuts error against a converged image from 16.6 to
+  6.1 display levels, below the 11.5 of 64 undenoised samples; the gain shrinks as samples
+  grow, since the filter's own blur starts to count. It knows only what the first ray
+  hit, so what a mirror or glass shows is smoothed along with its noise.
 * **Gamma correction.** Output is square-rooted before writing, an approximation of sRGB
   that keeps midtones from looking too dark.
 * **Multithreaded.** One worker per hardware thread, each claiming the next unrendered row
@@ -129,6 +140,7 @@ make
 ./photon_tracer --width 480         # a smaller 16:9 image
 ./photon_tracer --seed 7 --out a.ppm  # the same image every time, written to a.ppm
 ./photon_tracer --out a.pfm         # linear floats (Portable Float Map) instead of display bytes
+./photon_tracer --room --spp 16 --denoise  # few samples, then the denoiser
 make test                           # render regression tests, about 75 CPU-seconds
 ```
 
@@ -272,7 +284,10 @@ Rendering is progressive by default: passes of 1, 1, 2, 4... samples per pixel, 
 per pixel in linear color on the page and gamma corrected for display, so a noisy full
 frame appears almost at once and then refines. Each worker has two rows in flight, so
 it never waits on the page for its next one, and the canvas is drawn once per animation
-frame rather than once per row. The page also switches between the three
+frame rather than once per row. With denoising on, the workers also return each row's
+albedo, normal and squared luminance, and after each progressive pass a separate worker
+(`denoise.js`) filters the whole frame, which then replaces the noisy one; at 960x540 that
+takes about 0.7 s in WebAssembly on one thread, so it trails the render slightly. The page also switches between the three
 scenes and turns the BVH on and off, with the rays/s figure to compare. For the teapot,
 each worker fetches `teapot.obj` and copies it into its module's memory. Any control can
 be set from the URL, so a view can be linked: `?scene=2&threads=8&spp=50`.

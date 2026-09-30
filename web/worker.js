@@ -12,7 +12,7 @@ let queue = ready;
 onmessage = ({ data }) => { queue = queue.then(() => trace(data)); };
 
 async function trace(data) {
-  const { j, width, height, spp, first, bounces, scene, bvh } = data;
+  const { j, pass, width, height, spp, first, bounces, scene, bvh, aux } = data;
   if (data.seed !== seed) { tracer._set_seed(data.seed); seed = data.seed; }
   const key = scene + '/' + bvh;
   if (key !== sceneKey) {
@@ -27,7 +27,11 @@ async function trace(data) {
     sceneKey = key;
   }
   const t0 = performance.now();
-  const ptr = tracer._trace_row(j, width, height, spp, bounces, first) >> 2;
+  const ptr = tracer._trace_row(j, width, height, spp, bounces, first, aux ? 1 : 0) >> 2;
   const pixels = tracer.HEAPF32.slice(ptr, ptr + width * 3);
-  postMessage({ j, spp, pixels, rays: tracer._take_rays(), ms: performance.now() - t0 }, [pixels.buffer]);
+  // The denoiser's guide data for the row, when the page is denoising.
+  let guide = null;
+  if (aux) { const a = tracer._row_aux() >> 2; guide = tracer.HEAPF32.slice(a, a + width * 7); }
+  const transfer = guide ? [pixels.buffer, guide.buffer] : [pixels.buffer];
+  postMessage({ j, pass, spp, pixels, guide, rays: tracer._take_rays(), ms: performance.now() - t0 }, transfer);
 }

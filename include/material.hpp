@@ -19,6 +19,9 @@ public:
     // sampling the lights directly (see direct_light() in renderer.hpp).
     color emission;
     bool diffuse = false;
+    // Glass: its attenuation is white and says nothing of the surface, so the
+    // denoiser takes its albedo as white too.
+    bool transmissive = false;
 
     bool emits() const { return emission.x() > 0 || emission.y() > 0 || emission.z() > 0; }
 };
@@ -99,7 +102,7 @@ class dielectric : public material {
 public:
     real ior;  // Index of refraction: 1.5 for glass, 1.33 for water
 
-    explicit dielectric(real index) : ior(index) {}
+    explicit dielectric(real index) : ior(index) { transmissive = true; }
 
     bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered) const override {
         attenuation = color(1, 1, 1);

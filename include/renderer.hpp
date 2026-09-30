@@ -6,6 +6,7 @@
 #include "geometry.hpp"
 #include "obj.hpp"
 #include "camera.hpp"
+#include "denoise.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -81,7 +82,15 @@ inline color direct_light(const geometry& world, const hit_record& rec) {
 // Follows one path for up to depth rays. throughput is how much of the light
 // arriving along the current ray still reaches the camera: the product of the
 // attenuations so far.
-inline color ray_color(ray r, const geometry& world, int depth) {
+// What a path's first ray hit, for the denoiser (denoise.hpp): the surface's
+// albedo (white for glass, lights and sky, which have none) and its normal
+// (zero for sky).
+struct first_hit {
+    color albedo;
+    vec3 normal;
+};
+
+inline color ray_color(ray r, const geometry& world, int depth, first_hit* first = nullptr) {
     color throughput(1, 1, 1), radiance(0, 0, 0);
     // Whether the last bounce was off a matte surface that sampled the lights
     // directly: a light this ray then hits was already counted there.
@@ -91,13 +100,19 @@ inline color ray_color(ray r, const geometry& world, int depth) {
         set_bounce(bounce);
 
         hit_record rec;
-        if (!world.hit(r, real(0.001), 1000, rec)) return radiance + throughput * background(world, r);
+        if (!world.hit(r, real(0.001), 1000, rec)) {
+            if (first && bounce == 0) *first = {color(1, 1, 1), vec3(0, 0, 0)};
+            return radiance + throughput * background(world, r);
+        }
 
         if (rec.front_face && !(sampled && rec.sampled_light)) radiance = radiance + throughput * rec.mat->emission;
 
         ray scattered;
         color attenuation;
-        if (!rec.mat->scatter(r, rec, attenuation, scattered)) return radiance;
+        const bool scatters = rec.mat->scatter(r, rec, attenuation, scattered);
+        if (first && bounce == 0)
+            *first = {scatters && !rec.mat->transmissive ? attenuation : color(1, 1, 1), rec.normal};
+        if (!scatters) return radiance;
         // Not on the last bounce allowed: a light sample there would stand in
         // for one more ray than the path is allowed, which counted about 1%
         // more light than plain path tracing in the room scene.
@@ -262,13 +277,25 @@ inline void seed_row(uint64_t seed, int j, int first_sample) {
 // width linear RGB floats to out: the average of samples_per_pixel samples,
 // numbered from first_sample. The browser demo accumulates these over
 // progressive passes.
+//
+// If aux is not null, it gets aux_floats floats per pixel for the denoiser,
+// also averaged over the samples: the first hit's albedo (3) and normal (3),
+// and the mean squared luminance of the samples (1), which with the mean gives
+// the pixel's variance.
+constexpr int aux_floats = 7;
+
+inline real luminance(const color& c) { return real(0.2126) * c.x() + real(0.7152) * c.y() + real(0.0722) * c.z(); }
+
 inline void render_row_linear(const geometry& world, const camera& cam, int j, int width, int height,
                               int samples_per_pixel, int max_bounces, float* out, uint64_t seed,
-                              int first_sample = 0) {
+                              int first_sample = 0, float* aux = nullptr) {
     seed_row(seed, j, first_sample);
     const real scale = real(1) / samples_per_pixel;
     for (int i = 0; i < width; ++i) {
         color pixel_color(0, 0, 0);
+        color albedo(0, 0, 0);
+        vec3 normal(0, 0, 0);
+        real lum2 = 0;
 
         // Anti-Aliasing Loop: Shoot multiple rays with slight random offsets
         for (int s = 0; s < samples_per_pixel; ++s) {
@@ -278,11 +305,28 @@ inline void render_row_linear(const geometry& world, const camera& cam, int j, i
             real u = (i + du) / (width - 1);
             real v = (j + dv) / (height - 1);
             ray r = cam.get_ray(u, v);
-            pixel_color = pixel_color + ray_color(r, world, max_bounces);
+            if (!aux) {
+                pixel_color = pixel_color + ray_color(r, world, max_bounces);
+                continue;
+            }
+            first_hit first;
+            const color c = ray_color(r, world, max_bounces, &first);
+            pixel_color = pixel_color + c;
+            albedo = albedo + first.albedo;
+            normal = normal + first.normal;
+            lum2 += luminance(c) * luminance(c);
         }
         out[3 * i]     = static_cast<float>(pixel_color.x() * scale);
         out[3 * i + 1] = static_cast<float>(pixel_color.y() * scale);
         out[3 * i + 2] = static_cast<float>(pixel_color.z() * scale);
+        if (aux) {
+            float* a = aux + aux_floats * i;
+            for (int c = 0; c < 3; ++c) {
+                a[c] = static_cast<float>(albedo.e[c] * scale);
+                a[3 + c] = static_cast<float>(normal.e[c] * scale);
+            }
+            a[6] = static_cast<float>(lum2 * scale);
+        }
     }
 }
 

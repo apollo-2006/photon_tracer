@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
     int spp = 50;
     int threads_flag = 0;
     bool nee = true;
+    bool denoise_flag = false;
     int image_width = 1920;
     std::string out_path = "render.ppm";
     uint64_t seed = (uint64_t(std::random_device{}()) << 32) ^ std::random_device{}();
@@ -36,6 +37,7 @@ int main(int argc, char** argv) {
         else if (arg == "--mesh") scene = scene_id::mesh;
         else if (arg == "--room") scene = scene_id::room;
         else if (arg == "--no-nee") nee = false;
+        else if (arg == "--denoise") denoise_flag = true;
         else if (arg == "--obj" && a + 1 < argc) { scene = scene_id::mesh; obj_path = argv[++a]; }
         else if (arg == "--bvh") bvh_flag = 1;
         else if (arg == "--no-bvh") bvh_flag = 0;
@@ -45,7 +47,7 @@ int main(int argc, char** argv) {
         else if (arg == "--out" && a + 1 < argc) out_path = argv[++a];
         else if (arg == "--seed" && a + 1 < argc) seed = std::stoull(argv[++a]);
         else {
-            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH | --room] [--bvh|--no-bvh] [--no-nee] [--spp N]"
+            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH | --room] [--bvh|--no-bvh] [--no-nee] [--denoise] [--spp N]"
                       << " [--threads N] [--width N] [--out PATH] [--seed N]\n";
             return 2;
         }
@@ -79,6 +81,8 @@ int main(int argc, char** argv) {
 
     // 4. Threading Setup. Linear color, converted for display when written.
     std::vector<float> image(3 * static_cast<size_t>(image_width) * image_height);
+    // Albedo, normal and squared luminance per pixel, for --denoise.
+    std::vector<float> aux(denoise_flag ? aux_floats * static_cast<size_t>(image_width) * image_height : 0);
     int num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;
     if (threads_flag > 0) num_threads = threads_flag;
@@ -101,8 +105,9 @@ int main(int argc, char** argv) {
     auto render_worker = [&]() {
         for (int j = next_row.fetch_add(1); j < image_height; j = next_row.fetch_add(1)) {
             // j counts up from the bottom; image is stored top row first.
+            const size_t row = static_cast<size_t>(image_height - 1 - j) * image_width;
             render_row_linear(world, cam, j, image_width, image_height, samples_per_pixel, max_bounces,
-                              &image[3 * static_cast<size_t>(image_height - 1 - j) * image_width], seed);
+                              &image[3 * row], seed, 0, denoise_flag ? &aux[aux_floats * row] : nullptr);
 
             std::lock_guard<std::mutex> lock(progress_mutex);
             rows_completed++;
@@ -122,6 +127,24 @@ int main(int argc, char** argv) {
     }
     const double render_s =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - render_start).count();
+
+    double denoise_s = 0;
+    if (denoise_flag) {
+        const auto start = std::chrono::steady_clock::now();
+        const size_t n = static_cast<size_t>(image_width) * image_height;
+        std::vector<float> albedo(3 * n), normal(3 * n), variance(n), denoised(3 * n);
+        for (size_t p = 0; p < n; ++p) {
+            const float* a = &aux[aux_floats * p];
+            for (int c = 0; c < 3; ++c) { albedo[3 * p + c] = a[c]; normal[3 * p + c] = a[3 + c]; }
+            // Variance of the mean: that of one sample over the sample count.
+            const float mean = luminance(color(image[3 * p], image[3 * p + 1], image[3 * p + 2]));
+            variance[p] = (a[6] - mean * mean) / samples_per_pixel;
+        }
+        denoise({image_width, image_height, image.data(), albedo.data(), normal.data(), variance.data()},
+                denoised.data(), num_threads);
+        image.swap(denoised);
+        denoise_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    }
 
     // 7. Output to File. Binary PPM (P6): the header, then the bytes as they
     // are. The ASCII form (P3) was four times the size and, once rendering got
@@ -159,6 +182,8 @@ int main(int argc, char** argv) {
               << total_rays << " rays) on " << num_threads << " threads, "
               << (scene == scene_id::field ? "field" : scene == scene_id::mesh ? "mesh"
                   : scene == scene_id::room ? "room" : "materials") << " scene, "
-              << (use_bvh ? "BVH" : "no BVH") << ", seed " << seed << '\n';
+              << (use_bvh ? "BVH" : "no BVH") << ", seed " << seed;
+    if (denoise_flag) std::cerr << ", denoised in " << denoise_s << " s";
+    std::cerr << '\n';
     return 0;
 }
