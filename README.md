@@ -66,6 +66,14 @@ A CPU-based raytracer written from scratch in C++, built to explore computer gra
   stack, nearest child first, skipping any box farther than the nearest hit so far. The
   ground sphere stays outside the tree: its box contains the whole scene, so every ray
   would enter it anyway and it would widen every box above it.
+* **Instancing, a two-level BVH.** A mesh can be placed any number of times: each mesh
+  has its own tree in its own space, and each instance is a transform, a box in a
+  top-level tree, and optionally a material of its own. A ray that reaches an instance
+  is moved into the mesh's space (the same `t` holds in both, since the transform is
+  affine) and continues down the mesh's tree; a hit's normal comes back by the inverse
+  transpose. It is the bottom-level/top-level split of Vulkan ray tracing and DXR.
+  Instances have a top-level tree of their own rather than joining the main one, since
+  checking every leaf for instances slowed scenes without any by 5-7%.
 * **Single precision.** Geometry and color are `float` (`real` in `vec3.hpp`), except
   the ground sphere's intersection, which is `double`: in `float`, `|oc|^2 - r^2` for a
   sphere of radius 100 loses the few thousandths that separate a bounce from the surface
@@ -125,6 +133,14 @@ in its place.
 5,856 triangles) in the teapot's place, textured through its MTL file, turned to face the
 camera.
 
+`--crowd` is a grid of 20 x 20 instanced teapots, 2.5 million triangles, each turned,
+sized and colored at random, on a wide ground; `--crowd N` makes it N x N, `--obj PATH`
+makes it of another model, and `--flatten` writes every copy's triangles out into one
+tree instead of instancing, for comparison. `models/fetch.sh` downloads the Stanford bunny
+(69,451 triangles), which is not redistributed here: `--crowd 40 --obj
+models/stanford-bunny.obj` is 1,600 bunnies, 111 million triangles in 95 MB, built in
+0.09 s and rendered at 960x540 and 32 spp in half a second.
+
 `--room` is a closed box, red on the left and green on the right, lit only by a small
 sphere lamp under the ceiling, with glass, metal and matte spheres on the floor. No sky
 reaches in, so all of its light comes through next event estimation or, for caustics
@@ -145,6 +161,8 @@ make
 ./photon_tracer --field --no-bvh    # the same, testing every sphere per ray
 ./photon_tracer --mesh              # the Utah teapot
 ./photon_tracer --room              # a closed room lit by one small lamp
+./photon_tracer --crowd             # 400 instanced teapots; --crowd N for N x N, --flatten to compare
+models/fetch.sh && ./photon_tracer --crowd 40 --obj models/stanford-bunny.obj  # 1,600 bunnies
 ./photon_tracer --room --no-nee     # the same without sampling the lamp directly
 ./photon_tracer --obj model.obj     # your own model in the teapot's place, with its .mtl materials
 ./photon_tracer --obj models/spot/spot.obj --turn 150  # a textured cow, turned to face the camera
@@ -240,6 +258,18 @@ Where it came from, one change at a time:
 Renders match the old ones to within the noise between two runs of the old one, per pixel
 and in mean brightness.
 
+Instancing against writing every copy out (`--flatten`), for the 400-teapot crowd at
+960x540 and 32 spp:
+
+| crowd | built in | peak memory | render |
+|---|---|---|---|
+| instanced | 7.5 ms | 14 MB | 0.52 s |
+| flattened | 1.5 s | 631 MB | 0.43 s |
+
+One tree over every triangle is tighter than 400 overlapping instance boxes, so the
+flattened crowd renders 17% faster, but at 45 times the memory and 200 times the build
+time; 1,600 bunnies flattened would need about 14 GB.
+
 In the browser demo, Chrome, 32 Web Workers, same settings, progressive:
 
 | browser | before | first round | second round | |
@@ -287,7 +317,9 @@ It is sensitive enough to catch the precision bug from moving to `float`, which
 darkened the ground by about 0.02 of a display level on average: with it put back, the
 whole-image z-scores are -9 to -13 against a limit of 5, while six seeds of correct
 code stay within +/-2.6. It also found that the field scene came out differently under
-GCC and clang. After an intended change to how scenes look, rebuild the reference with
+GCC and clang. The crowd is checked twice, instanced and flattened against the same
+reference, which tests the instance transforms: with instance normals left in object
+space, it fails by z-scores in the thousands. After an intended change to how scenes look, rebuild the reference with
 `tests/render_test.py reference`, which takes under a minute on 32 threads.
 
 CI runs the tests on every push and pull request, and before each deploy of the demo,
@@ -307,7 +339,7 @@ frame rather than once per row. With denoising on, the workers also return each 
 albedo, normal and squared luminance, and after each progressive pass a separate worker
 (`denoise.js`) filters the whole frame, which then replaces the noisy one; at 960x540 that
 takes about 0.7 s in WebAssembly on one thread, so it trails the render slightly. The page also switches between the three
-scenes and turns the BVH on and off, with the rays/s figure to compare. For the teapot,
+scenes (the crowd included) and turns the BVH on and off, with the rays/s figure to compare. For the teapot,
 each worker fetches `teapot.obj` and copies it into its module's memory. Any control can
 be set from the URL, so a view can be linked: `?scene=2&threads=8&spp=50`.
 GitHub Actions builds the native renderer and the demo and publishes it to Pages on every

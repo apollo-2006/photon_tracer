@@ -16,9 +16,9 @@ async function trace(data) {
   if (data.seed !== seed) { tracer._set_seed(data.seed); seed = data.seed; }
   const key = scene + '/' + bvh;
   if (key !== sceneKey) {
-    // The mesh scene needs the model in the module's memory first. HEAPU8 is
+    // The mesh and crowd scenes need the model in the module's memory first. HEAPU8 is
     // read after obj_buffer() because allocating can grow and replace it.
-    if (scene === 2 && !objLoaded) {
+    if ((scene === 2 || scene === 4) && !objLoaded) {
       const bytes = new Uint8Array(await (await fetch('teapot.obj')).arrayBuffer());
       tracer.HEAPU8.set(bytes, tracer._obj_buffer(bytes.length));
       objLoaded = true;

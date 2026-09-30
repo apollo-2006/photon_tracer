@@ -1,6 +1,7 @@
 #include "renderer.hpp"
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -29,6 +30,8 @@ int main(int argc, char** argv) {
     bool nee = true;
     bool denoise_flag = false;
     double turn_deg = 0;
+    bool crowd = false, flatten = false;
+    int crowd_side = 20;
     int image_width = 1920;
     std::string out_path = "render.ppm";
     uint64_t seed = (uint64_t(std::random_device{}()) << 32) ^ std::random_device{}();
@@ -37,6 +40,8 @@ int main(int argc, char** argv) {
         if (arg == "--field") scene = scene_id::field;
         else if (arg == "--mesh") scene = scene_id::mesh;
         else if (arg == "--room") scene = scene_id::room;
+        else if (arg == "--crowd") { crowd = true; if (a + 1 < argc && std::isdigit(static_cast<unsigned char>(argv[a + 1][0]))) crowd_side = std::stoi(argv[++a]); }
+        else if (arg == "--flatten") flatten = true;
         else if (arg == "--no-nee") nee = false;
         else if (arg == "--denoise") denoise_flag = true;
         else if (arg == "--turn" && a + 1 < argc) turn_deg = std::stod(argv[++a]);
@@ -49,16 +54,18 @@ int main(int argc, char** argv) {
         else if (arg == "--out" && a + 1 < argc) out_path = argv[++a];
         else if (arg == "--seed" && a + 1 < argc) seed = std::stoull(argv[++a]);
         else {
-            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH [--turn DEG] | --room] [--bvh|--no-bvh] [--no-nee] [--denoise] [--spp N]"
+            std::cerr << "usage: " << argv[0] << " [--field | --mesh | --obj PATH [--turn DEG] | --room | --crowd [N] [--flatten]] [--bvh|--no-bvh] [--no-nee] [--denoise] [--spp N]"
                       << " [--threads N] [--width N] [--out PATH] [--seed N]\n";
             return 2;
         }
     }
+    // The crowd is made of the teapot, or of the --obj model.
+    if (crowd) scene = scene_id::crowd;
     const camera cam = make_camera(scene);
     const bool use_bvh = bvh_flag < 0 ? scene != scene_id::materials : bvh_flag == 1;
 
     std::string obj_text;
-    if (scene == scene_id::mesh) {
+    if (scene == scene_id::mesh || scene == scene_id::crowd) {
         std::ifstream obj(obj_path);
         if (!obj) {
             std::cerr << "Failed to open " << obj_path << ".\n";
@@ -91,13 +98,26 @@ int main(int argc, char** argv) {
         return buf.str();
     };
     geometry world;
+    const auto build_start = std::chrono::steady_clock::now();
     try {
-        world = build_world(scene, use_bvh, obj_text, read_beside_obj, turn_deg);
+        world = build_world(scene, use_bvh, obj_text, read_beside_obj, turn_deg, crowd_side, flatten);
     } catch (const std::exception& e) {
         std::cerr << "Failed to load " << obj_path << ": " << e.what() << '\n';
         return 1;
     }
     world.sample_lights = nee;
+    const double build_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - build_start).count();
+    {
+        // What is stored, against what the scene holds once instances are counted.
+        size_t stored = world.triangles.size(), placed = world.triangles.size();
+        for (const auto& in : world.instances) placed += world.meshes[in.mesh].triangles.size();
+        for (const auto& m : world.meshes) stored += m.triangles.size();
+        std::cerr << "Scene built in " << build_s << " s: " << placed << " triangles";
+        if (!world.instances.empty())
+            std::cerr << " (" << world.instances.size() << " instances of " << world.meshes.size() << " mesh, " << stored
+                      << " triangles stored)";
+        std::cerr << '\n';
+    }
 
     // 4. Threading Setup. Linear color, converted for display when written.
     std::vector<float> image(3 * static_cast<size_t>(image_width) * image_height);
@@ -201,7 +221,7 @@ int main(int argc, char** argv) {
               << std::setprecision(3) << total_rays / render_s / 1e6 << std::setprecision(6) << "M rays/s ("
               << total_rays << " rays) on " << num_threads << " threads, "
               << (scene == scene_id::field ? "field" : scene == scene_id::mesh ? "mesh"
-                  : scene == scene_id::room ? "room" : "materials") << " scene, "
+                  : scene == scene_id::room ? "room" : scene == scene_id::crowd ? "crowd" : "materials") << " scene, "
               << (use_bvh ? "BVH" : "no BVH") << ", seed " << seed;
     if (denoise_flag) std::cerr << ", denoised in " << denoise_s << " s";
     std::cerr << '\n';

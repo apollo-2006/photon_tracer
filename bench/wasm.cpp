@@ -18,7 +18,8 @@ int main() {
                         {scene_id::materials, true, 10, "materials, BVH"},
                         {scene_id::field, true, 10, "field"},
                         {scene_id::mesh, true, 4, "teapot, 4 spp"},
-                        {scene_id::room, true, 4, "room, 4 spp"}};
+                        {scene_id::room, true, 4, "room, 4 spp"},
+                        {scene_id::crowd, true, 4, "crowd, 4 spp"}};
     std::vector<float> row(3 * w);
     std::printf("| scene | best of 3 | rays/s |\n|---|---|---|\n");
     for (const run& r : runs) {

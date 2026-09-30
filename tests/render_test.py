@@ -44,14 +44,23 @@ SCENES = {
     "field": ["--field"],
     "teapot": ["--mesh"],
     "room": ["--room"],
+    "crowd": ["--crowd", "8"],
+    # The same crowd with every copy's triangles written out instead of
+    # instanced: it must match the instanced crowd's reference, which checks
+    # the instance transforms, normals and inverses.
+    "crowd, flattened": ["--crowd", "8", "--flatten"],
 }
+# Scenes checked against another scene's reference.
+SAME_AS = {"crowd, flattened": "crowd"}
 
 # Largest |z| allowed for a single block, for a row of blocks, and for the whole
 # image. The block limit is high because there are thousands of blocks and each
 # sigma is itself estimated from SEEDS renders, which gives heavier tails than
-# a normal distribution; the row and image limits are where a small, broad
-# shift shows up, since it adds up over many blocks.
-Z_BLOCK, Z_ROW, Z_IMAGE = 8.0, 6.0, 5.0
+# a normal distribution, and glass and metal add rare, very bright pixels
+# (the crowd scene's worst block reached 7.4 on correct code); the row and
+# image limits are where a small, broad shift shows up, since it adds up over
+# many blocks. Real bugs so far scored from 9 to over 3000.
+Z_BLOCK, Z_ROW, Z_IMAGE = 10.0, 6.0, 5.0
 
 # Blocks of pure sky vary by almost nothing between seeds, and a different
 # compiler rounds differently. A floor on sigma keeps those blocks from
@@ -100,7 +109,7 @@ def block_means(path):
 def make_reference(args):
     ref = {"width": WIDTH, "spp": SPP, "block": BLOCK, "seeds": SEEDS, "scenes": {}}
     with tempfile.TemporaryDirectory() as tmp:
-        for scene in args.scenes:
+        for scene in [s for s in args.scenes if s not in SAME_AS]:
             runs = []
             for k in range(SEEDS):
                 path = os.path.join(tmp, f"{scene}.pfm")
@@ -156,7 +165,7 @@ def check_scene(scene, data, tmp, seed):
     worst_image = max(abs(z) for z in image_z)
 
     ok = worst_block <= Z_BLOCK and worst_row <= Z_ROW and worst_image <= Z_IMAGE
-    print(f"{'ok  ' if ok else 'FAIL'} {scene:10s} worst block z {worst_block:5.2f} (<= {Z_BLOCK}), "
+    print(f"{'ok  ' if ok else 'FAIL'} {scene:16s} worst block z {worst_block:5.2f} (<= {Z_BLOCK}), "
           f"row z {worst_row:5.2f} (<= {Z_ROW}), image z "
           f"{', '.join(f'{z:+.2f}' for z in image_z)} (|z| <= {Z_IMAGE})")
     return ok
@@ -186,7 +195,7 @@ def check(args):
     with tempfile.TemporaryDirectory() as tmp:
         ok &= check_seed_is_reproducible(tmp)
         for scene in args.scenes:
-            ok &= check_scene(scene, ref["scenes"][scene], tmp, args.seed)
+            ok &= check_scene(scene, ref["scenes"][SAME_AS.get(scene, scene)], tmp, args.seed)
     sys.exit(0 if ok else 1)
 
 

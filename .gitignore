@@ -62,3 +62,9 @@ web/dist/
 !models/**/*.obj
 /tests/obj_test
 /tests/decode_image
+# Fetched by models/fetch.sh, not redistributed here
+/models/stanford-bunny.obj
+/models/armadillo.obj
+/models/happy.obj
+/models/xyzrgb_dragon.obj
+/models/*.obj.part

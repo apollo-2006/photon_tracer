@@ -93,7 +93,14 @@ struct first_hit {
 // With_first says, at compile time, whether first is written: the plain path
 // is the hottest code there is, and even a branch per bounce on a null
 // pointer cost about 5%.
+//
+// Forced inline into the render loop, as geometry::hit() is into this: GCC's
+// own choice here shifts as unrelated code grows, and each time it stopped
+// inlining one of the two, renders got 5-15% slower.
 template <bool with_first = false>
+#if defined(__GNUC__)
+__attribute__((always_inline))
+#endif
 inline color ray_color(ray r, const geometry& world, int depth, first_hit* first = nullptr) {
     color throughput(1, 1, 1), radiance(0, 0, 0);
     // Whether the last bounce was off a matte surface that sampled the lights
@@ -141,7 +148,7 @@ inline color ray_color(ray r, const geometry& world, int depth, first_hit* first
     return radiance;
 }
 
-enum class scene_id { materials = 0, field = 1, mesh = 2, room = 3 };
+enum class scene_id { materials = 0, field = 1, mesh = 2, room = 3, crowd = 4 };
 
 // The materials scene: matte, glass and metal spheres one unit in front of the
 // camera, on a huge matte sphere as ground. The glass one is hollow: a second
@@ -206,6 +213,7 @@ inline camera make_camera(scene_id id) {
     if (id == scene_id::field) return camera(point3(0, 1.0, 1.2), point3(0, -0.3, -1.2), 55.0);
     if (id == scene_id::mesh) return camera(point3(0, 0.5, 1.2), point3(0, -0.15, -1.2), 45.0);
     if (id == scene_id::room) return camera(point3(0, 0, 0.3), point3(0, -0.15, -3.0), 62.0);
+    if (id == scene_id::crowd) return camera(point3(0, 2.4, 3.2), point3(0, -0.6, -7.0), 52.0);
     return camera();
 }
 
@@ -259,12 +267,75 @@ inline geometry make_room_scene() {
     return world;
 }
 
+// The crowd scene: side x side copies of one model (the teapot, or any OBJ),
+// each turned, sized and, if the model brings no materials of its own,
+// colored at random, standing on a wide ground sphere. They are instances of
+// one mesh: the model's triangles and tree are stored once, and each copy is
+// a transform and a box in the top-level tree. With flatten, every copy's
+// triangles are written out instead, all in one tree, for comparison.
+inline geometry make_crowd_scene(const std::string& obj_text, const file_reader& read, int side, bool flatten,
+                                 double turn_deg = 0) {
+    geometry world;
+    const double ground_r = 1000;
+    const point3 ground_c(0, -ground_r - 0.5, -6);
+    world.large_spheres.emplace_back(ground_c, ground_r, world.own(std::make_shared<lambertian>(color(0.55, 0.6, 0.5))));
+
+    // The model, one unit tall, standing on the origin.
+    const material* plain = world.own(std::make_shared<lambertian>(color(0.7, 0.7, 0.7)));
+    load_obj(world, obj_text, point3(0, 0, 0), 1.0, plain, read, turn_deg);
+    std::vector<triangle> model(world.triangles.begin(), world.triangles.end());
+    world.triangles.clear();
+    const bool own_materials = std::any_of(model.begin(), model.end(), [&](const triangle& t) { return t.mat != plain; });
+    const uint32_t mesh_index = flatten ? 0 : world.add_mesh(model);
+
+    // Drawn in a fixed order, as in the field, so every build places the same crowd.
+    std::mt19937 rng(11);
+    auto u = [&rng] { return rng() * 0x1.0p-32; };
+    const auto glass = world.own(std::make_shared<dielectric>(1.5));
+    for (int row = 0; row < side; ++row) {
+        for (int col = 0; col < side; ++col) {
+            const double jitter_x = u(), jitter_z = u(), yaw = 360 * u(), size = 0.45 + 0.3 * u();
+            const double pick = u();
+            double c[3];
+            for (double& x : c) x = u();
+            const double fuzz = 0.2 * u();
+            const double x = (col - (side - 1) / 2.0) * 1.1 + 0.3 * (jitter_x - 0.5);
+            const double z = -1.2 - row * 1.1 + 0.3 * (jitter_z - 0.5);
+            // Set down on the ground sphere, which curves away from the camera.
+            const double dx = x - ground_c.x(), dz = z - ground_c.z();
+            const double y = ground_c.y() + std::sqrt(ground_r * ground_r - dx * dx - dz * dz);
+            const affine place = affine::place(static_cast<real>(size), yaw, vec3(x, y, z));
+
+            const material* m = nullptr;
+            if (!own_materials) {
+                if (pick < 0.6) m = world.own(std::make_shared<lambertian>(color(c[0] * 0.8, c[1] * 0.8, c[2] * 0.8)));
+                else if (pick < 0.9) m = world.own(std::make_shared<metal>(color(0.5 + 0.5 * c[0], 0.5 + 0.5 * c[1], 0.5 + 0.5 * c[2]), fuzz));
+                else m = glass;
+            }
+            if (!flatten) {
+                world.add_instance(mesh_index, place, m);
+                continue;
+            }
+            const affine to_object = place.inverse();
+            for (const triangle& t : model) {
+                const point3 a = place.point(t.p0), b = place.point(t.p0 + t.e1), cc = place.point(t.p0 + t.e2);
+                auto n = [&](const vec3& v) { return to_object.transposed(v).normalize(); };
+                triangle w(a, b, cc, n(t.n0), n(t.n1), n(t.n2), m ? m : t.mat);
+                std::copy(t.uv, t.uv + 6, w.uv);
+                world.triangles.push_back(w);
+            }
+        }
+    }
+    return world;
+}
+
 // The scene as something to trace: the plain list, or a BVH over it. obj_text
-// is only read by the mesh scene.
+// is only read by the mesh and crowd scenes.
 // read, if given, finds the files the OBJ refers to (see obj.hpp).
 inline geometry build_world(scene_id id, bool use_bvh, const std::string& obj_text = "", const file_reader& read = {},
-                            double turn_deg = 0) {
+                            double turn_deg = 0, int crowd_side = 20, bool flatten = false) {
     geometry world = id == scene_id::mesh ? make_mesh_scene(obj_text, read, turn_deg)
+                   : id == scene_id::crowd ? make_crowd_scene(obj_text, read, crowd_side, flatten, turn_deg)
                    : id == scene_id::room ? make_room_scene()
                                           : make_scene(id);
     world.build(use_bvh);
