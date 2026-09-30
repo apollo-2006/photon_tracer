@@ -115,6 +115,10 @@ The tracing itself (`ray_color`, the scenes, and `render_row`) lives in
 
 ## Performance
 
+`bench/native.sh` times every scene natively, best of three with a fixed seed so each run
+traces the same rays, and prints a table; `bench/wasm.sh` does the same for the
+WebAssembly build on one thread under Node (it needs `em++` and `node`).
+
 The renderer prints its own timing when it finishes. Ryzen 9 5900XT (16 cores, 32
 threads), g++ 16 `-O3`, 1920x1080, 50 samples per pixel, up to 10 bounces, best of three:
 
