@@ -374,6 +374,52 @@ space, it fails by z-scores in the thousands. After an intended change to how sc
 CI runs the tests on every push and pull request, and before each deploy of the demo,
 and writes both benchmarks to the run's summary.
 
+## WebGPU in the demo
+
+Where the browser has WebGPU, the demo traces on the graphics card (`web/tracer.wgsl`).
+The scene still comes from the C++ code: a worker's WebAssembly module builds it with its
+BVHs as for the CPU, and `include/gpu_pack.hpp` flattens it into typed arrays, the 4-wide
+nodes of every tree (flat, instances, meshes) rebased into one array, spheres, triangles,
+instances, materials and lights, which the page uploads as storage buffers. The BVH nodes
+copy byte for byte: their C++ layout is what WGSL reads.
+
+One compute invocation traces one pixel, walking the trees with a small stack: 4-wide
+slab tests, children sorted by entry distance, instances by moving the ray into mesh space.
+Materials, next event estimation, sky and Russian roulette follow `renderer.hpp`; the
+denoiser is `denoise.hpp` ported to compute passes, guided by first-hit data the tracer
+gathers itself. Samples come in batches that grow from one while each stays under about
+20 ms, so the first noisy frame shows at once. `?engine=cpu` keeps the WebAssembly workers.
+
+Two things took measuring to get right:
+
+* **Precision.** WGSL has no 64-bit floats, so the ground spheres (radius 100 and 1,000)
+  use a cancellation-free form of the quadratic, and rays leaving them start 1e-4 off the
+  surface. A first version nudged every bounce off its surface; along the teapot's
+  silhouettes, where reflections graze, that shifted the image enough to fail the render
+  tests, so only the ground's rays move, as only the ground needs double on the CPU.
+* **Private memory.** Each traversal keeps its stack in private memory, and with instances
+  two are live at once. A 64-entry stack spilled: halving it to 32, enough for trees 10
+  levels deep (the deepest here are 10), took the room from 1.41 s to 0.86 s and the crowd
+  from 2.5 s to 1.67 s. `pack_for_gpu()` refuses deeper trees, and the page then uses the
+  workers.
+
+1920x1080 at 50 samples per pixel in Chrome, AMD Radeon RX 9070 XT against 32 WebAssembly
+workers on the Ryzen 9 5900XT, best of two:
+
+| scene | CPU workers | WebGPU | |
+|---|---|---|---|
+| materials | 1.22 s | **0.17 s** | 7.2x |
+| field | 1.53 s | **0.25 s** | 6.1x |
+| teapot | 1.32 s | **0.26 s** | 5.1x |
+| room | 4.85 s | **0.85 s** | 5.7x |
+| crowd | 3.80 s | **1.68 s** | 2.3x |
+
+The page's default view, 960x540 at 20 samples, denoised, goes from 0.34 s to 0.11 s. The
+crowd gains least: its rays walk two trees, one inside the other, which costs a GPU more
+than it costs a CPU. `tests/render_test.py check --webgpu` (`make test-webgpu`) renders every
+demo scene in a headless Chrome through `tests/webgpu_render.mjs` and checks it against the
+CPU references; CI does not run it, having no GPU.
+
 ## Web demo
 
 `web/tracer_web.cpp` exposes `render_row_linear()` and a scene/BVH switch to JavaScript and `web/build.sh` compiles it
@@ -410,10 +456,12 @@ python3 -m http.server -d web/dist    # then open http://localhost:8000
   metal, still depend on luck.
 * **Scene-fixed cameras.** Each scene has a look-at camera with a field of view, but
   there are no controls for it and no depth of field.
+* **No textures in WebGPU.** The demo's scenes have none, so the packer leaves them out.
 * **The GPU renderer draws only the crowd.** No small spheres (they would need procedural
   geometry in the acceleration structures), no lights or next event estimation, no
   denoiser, and no occlusion culling yet. It needs Vulkan 1.3 with mesh shaders and ray
-  queries, so the browser demo, on WebGPU's terms or WebAssembly's, cannot use it.
+  queries, so the browser demo cannot use it: WebGPU has neither, and the demo's WebGPU
+  tracer walks its BVHs in shader code.
 * **Row granularity.** Work is claimed a whole row at a time, so one expensive row still
   runs on a single thread.
 

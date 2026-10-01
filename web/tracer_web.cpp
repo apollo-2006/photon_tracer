@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "gpu_pack.hpp"
 #include "renderer.hpp"
 
 namespace {
@@ -14,6 +15,9 @@ std::vector<float> row, row_aux_data;
 // The denoiser's inputs and output, sized by denoise_buffers().
 std::vector<float> dn_color, dn_albedo, dn_normal, dn_variance, dn_out;
 std::string obj_text;  // The mesh scene's model, written in by the page
+std::vector<uint32_t> packed;  // The scene for the WebGPU tracer, from gpu_scene()
+scene_id current = scene_id::materials;
+int crowd_side = 20;  // The crowd's rows and columns; the render tests use 8
 // One per render, from the page, so every worker draws from the same streams.
 uint64_t seed = 0;
 }
@@ -32,7 +36,8 @@ EMSCRIPTEN_KEEPALIVE void set_seed(double s) { seed = static_cast<uint64_t>(s); 
 // Switch scene, and between the BVH and the plain list.
 EMSCRIPTEN_KEEPALIVE void set_scene(int scene, int use_bvh) {
     const scene_id id = static_cast<scene_id>(scene);
-    world = build_world(id, use_bvh != 0, obj_text);
+    world = build_world(id, use_bvh != 0, obj_text, {}, 0, crowd_side);
+    current = id;
     cam = make_camera(id);
 }
 
@@ -79,6 +84,25 @@ EMSCRIPTEN_KEEPALIVE float* denoise_run(int width, int height) {
     denoise({width, height, dn_color.data(), dn_albedo.data(), dn_normal.data(), dn_variance.data()}, dn_out.data());
     return dn_out.data();
 }
+
+// The current scene, packed for the WebGPU tracer (include/gpu_pack.hpp),
+// with the BVH whatever the page's switch says, since the GPU tracer always
+// uses it. gpu_scene_size() gives its length in bytes.
+// Null if the scene cannot be traced there (a BVH deeper than its stack).
+EMSCRIPTEN_KEEPALIVE uint32_t* gpu_scene() {
+    const geometry with_bvh = build_world(current, true, obj_text, {}, 0, crowd_side);
+    try {
+        packed = serialize(pack_for_gpu(with_bvh, cam));
+    } catch (const std::exception&) {
+        packed.clear();
+        return nullptr;
+    }
+    return packed.data();
+}
+EMSCRIPTEN_KEEPALIVE int gpu_scene_size() { return static_cast<int>(4 * packed.size()); }
+
+// Takes effect at the next set_scene().
+EMSCRIPTEN_KEEPALIVE void set_crowd_side(int side) { crowd_side = side; }
 
 // Rays traced since the last call.
 EMSCRIPTEN_KEEPALIVE double take_rays() {

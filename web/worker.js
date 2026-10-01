@@ -9,20 +9,38 @@ const ready = PhotonTracer().then((m) => { tracer = m; });
 // first is still awaiting the module or the teapot. Chaining handles them in
 // order, so the scene is only ever set up once.
 let queue = ready;
-onmessage = ({ data }) => { queue = queue.then(() => trace(data)); };
+onmessage = ({ data }) => { queue = queue.then(() => (data.type === 'export' ? exportScene(data) : trace(data))); };
+
+// Loads the model a scene needs into the module, once.
+async function needModel(scene) {
+  // The mesh and crowd scenes need the model in the module's memory first. HEAPU8 is
+  // read after obj_buffer() because allocating can grow and replace it.
+  if ((scene === 2 || scene === 4) && !objLoaded) {
+    const bytes = new Uint8Array(await (await fetch('teapot.obj')).arrayBuffer());
+    tracer.HEAPU8.set(bytes, tracer._obj_buffer(bytes.length));
+    objLoaded = true;
+  }
+}
+
+// The scene packed for the WebGPU renderer (gpu.js), built by the same C++
+// code that traces it here.
+async function exportScene({ scene, crowd }) {
+  await needModel(scene);
+  if (crowd) tracer._set_crowd_side(crowd);
+  tracer._set_scene(scene, 1);
+  sceneKey = '';  // A row render after this sets its own scene again
+  const ptr = tracer._gpu_scene(), size = tracer._gpu_scene_size();
+  // Null: the scene is too deep for the GPU tracer; the page uses the workers.
+  const packed = ptr ? tracer.HEAPU8.slice(ptr, ptr + size).buffer : null;
+  postMessage({ type: 'scene', scene, packed }, packed ? [packed] : []);
+}
 
 async function trace(data) {
   const { j, pass, width, height, spp, first, bounces, scene, bvh, aux } = data;
   if (data.seed !== seed) { tracer._set_seed(data.seed); seed = data.seed; }
   const key = scene + '/' + bvh;
   if (key !== sceneKey) {
-    // The mesh and crowd scenes need the model in the module's memory first. HEAPU8 is
-    // read after obj_buffer() because allocating can grow and replace it.
-    if ((scene === 2 || scene === 4) && !objLoaded) {
-      const bytes = new Uint8Array(await (await fetch('teapot.obj')).arrayBuffer());
-      tracer.HEAPU8.set(bytes, tracer._obj_buffer(bytes.length));
-      objLoaded = true;
-    }
+    await needModel(scene);
     tracer._set_scene(scene, bvh ? 1 : 0);
     sceneKey = key;
   }
