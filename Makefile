@@ -43,6 +43,11 @@ gpu: photon_tracer_gpu
 test-gpu: photon_tracer_gpu
 	python3 tests/render_test.py check --gpu
 
+# The demo's WebGPU tracer in a headless Chrome, against the same references.
+# Needs web/dist (web/build.sh), node and google-chrome-stable, and a GPU.
+test-webgpu:
+	python3 tests/render_test.py check --webgpu
+
 # Unit tests for the OBJ reader, the meshlet builder and the PNG decoder, then the render
 # regression tests (tests/render_test.py).
 tests/obj_test: tests/obj_test.cpp $(wildcard include/*.hpp)
@@ -63,4 +68,4 @@ test: $(TARGET) tests/obj_test tests/meshlet_test tests/decode_image
 clean:
 	rm -rf $(OBJ_DIR) $(TARGET) photon_tracer_gpu render.ppm tests/obj_test tests/meshlet_test tests/decode_image
 
-.PHONY: all clean test gpu test-gpu
+.PHONY: all clean test gpu test-gpu test-webgpu

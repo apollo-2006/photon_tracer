@@ -9,5 +9,5 @@ em++ -std=c++17 -O3 -msimd128 -flto -Wall -Wextra -I../include tracer_web.cpp \
   -sMODULARIZE=1 -sEXPORT_NAME=PhotonTracer -sENVIRONMENT=worker \
   -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8 -sALLOW_MEMORY_GROWTH=1 \
   -o dist/photon_tracer.js
-cp index.html app.js worker.js denoise.js demo.css og.jpg ../models/teapot.obj dist/
+cp index.html app.js worker.js denoise.js gpu.js tracer.wgsl display.wgsl denoise.wgsl demo.css og.jpg ../models/teapot.obj dist/
 echo "built web/dist"

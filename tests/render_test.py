@@ -57,6 +57,10 @@ SCENES = {
 # What photon_tracer_gpu renders (the crowd only), checked against the same
 # references as the CPU renderer by check --gpu.
 GPU_SCENES = ["crowd", "spot crowd"]
+# What the browser demo's WebGPU renderer draws, through tests/webgpu_render.mjs
+# (headless Chrome), checked by check --webgpu.
+WEBGPU = ["node", os.path.join(ROOT, "tests", "webgpu_render.mjs")]
+WEBGPU_SCENES = ["materials", "field", "teapot", "room", "crowd"]
 # Scenes checked against another scene's reference.
 SAME_AS = {"crowd, flattened": "crowd"}
 
@@ -76,7 +80,7 @@ SIGMA_FLOOR = 2e-4
 
 
 def render(scene, seed, path, extra=(), binary=BINARY):
-    cmd = [binary, *SCENES[scene], "--width", str(WIDTH), "--spp", str(SPP),
+    cmd = [*([binary] if isinstance(binary, str) else binary), *SCENES[scene], "--width", str(WIDTH), "--spp", str(SPP),
            "--seed", str(seed), "--out", path, *extra]
     subprocess.run(cmd, cwd=ROOT, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -200,11 +204,12 @@ def check(args):
         sys.exit("tests/reference.json was made with other settings; run: tests/render_test.py reference")
     ok = True
     with tempfile.TemporaryDirectory() as tmp:
-        if args.gpu:
-            if not os.path.exists(GPU_BINARY):
+        if args.gpu or args.webgpu:
+            if args.gpu and not os.path.exists(GPU_BINARY):
                 sys.exit("build first: make gpu")
             for scene in args.scenes:
-                ok &= check_scene(scene, ref["scenes"][SAME_AS.get(scene, scene)], tmp, args.seed, GPU_BINARY)
+                ok &= check_scene(scene, ref["scenes"][SAME_AS.get(scene, scene)], tmp, args.seed,
+                                  GPU_BINARY if args.gpu else WEBGPU)
             sys.exit(0 if ok else 1)
         ok &= check_seed_is_reproducible(tmp)
         for scene in args.scenes:
@@ -220,9 +225,11 @@ def main():
     parser.add_argument("--seed", type=int, default=CHECK_SEED, help="seed for check renders")
     parser.add_argument("--gpu", action="store_true",
                         help="check photon_tracer_gpu against the CPU renderer's references")
+    parser.add_argument("--webgpu", action="store_true",
+                        help="check the demo's WebGPU renderer, in headless Chrome, against them")
     args = parser.parse_args()
-    args.scenes = args.scenes or (GPU_SCENES if args.gpu else list(SCENES))
-    if not os.path.exists(BINARY):
+    args.scenes = args.scenes or (GPU_SCENES if args.gpu else WEBGPU_SCENES if args.webgpu else list(SCENES))
+    if not os.path.exists(BINARY) and not args.webgpu:
         sys.exit("build first: make")
     (make_reference if args.command == "reference" else check)(args)
 

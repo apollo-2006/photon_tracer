@@ -1,5 +1,7 @@
-// Page logic for the photon_tracer demo: a pool of workers, a row scheduler,
-// and a canvas. All tracing happens in WebAssembly inside the workers.
+// Page logic for the photon_tracer demo. Two engines: the WebGPU tracer
+// (gpu.js), which traces on the graphics card a scene the C++ code built, and
+// the original one, a pool of WebAssembly workers fed rows by a scheduler
+// here. WebGPU is the default where the browser has it.
 const $ = (id) => document.getElementById(id);
 const cores = navigator.hardwareConcurrency || 4;
 let pool = [], job = null;
@@ -12,6 +14,41 @@ $('threads').value = Math.max(1, cores);
 for (const id of ['spp', 'bounces', 'threads']) {
   const show = () => { $(id + 'V').textContent = $(id).value; };
   $(id).addEventListener('input', show); show();
+}
+
+// The WebGPU renderer, or null where the browser has none (or it failed).
+const gpuReady = import('./gpu.js')
+  .then(({ GpuRenderer }) => GpuRenderer.create())
+  .catch((e) => { console.warn('WebGPU unavailable:', e); return null; });
+let gpu = null, gpuContext = null, sceneWorker = null;
+// Packed scenes for the GPU, by scene number, from a worker's WebAssembly.
+const packedScenes = new Map();
+
+function packedScene(scene) {
+  if (packedScenes.has(scene)) return packedScenes.get(scene);
+  sceneWorker = sceneWorker || new Worker('worker.js');
+  const p = new Promise((resolve) => {
+    const listen = ({ data }) => {
+      if (data.type !== 'scene' || data.scene !== scene) return;
+      sceneWorker.removeEventListener('message', listen);
+      resolve(data.packed);
+    };
+    sceneWorker.addEventListener('message', listen);
+    sceneWorker.postMessage({ type: 'export', scene });
+  });
+  packedScenes.set(scene, p);
+  return p;
+}
+
+const usingGpu = () => gpu && $('engine').value === 'gpu';
+
+// The controls that only mean something for the workers.
+function showEngine() {
+  const g = usingGpu();
+  $('out').hidden = g;
+  $('gpuout').hidden = !g;
+  for (const id of ['bvh', 'threads', 'sched']) $(id).disabled = g;
+  $('workers').hidden = g;
 }
 
 function ensurePool(n) {
@@ -37,6 +74,8 @@ function passSizes(spp, progressive) {
 
 function render() {
   if (job) stop();
+  showEngine();
+  if (usingGpu()) { renderGpu(); return; }
   const width = Number($('res').value), height = Math.round(width * 9 / 16);
   const spp = Number($('spp').value), bounces = Number($('bounces').value);
   const scene = Number($('scene').value), bvh = $('bvh').value === '1';
@@ -196,6 +235,59 @@ function render() {
   $('schedNote').textContent = bands ? `each worker owns ${rowsPerBand} consecutive rows` : 'workers take whichever row is next';
 }
 
+// The WebGPU path: the scene packed by the C++ code, traced in batches of
+// samples by a compute shader, shown after each batch.
+async function renderGpu() {
+  const width = Number($('res').value), height = Math.round(width * 9 / 16);
+  const spp = Number($('spp').value), bounces = Number($('bounces').value);
+  const scene = Number($('scene').value), denoise = $('denoise').value === '1';
+  const progressive = $('prog').value === '1';
+  const current = { live: true, gpu: true };
+  job = current;
+  $('go').disabled = true; $('stop').disabled = false;
+  $('schedNote').textContent = `WebGPU on ${gpu.adapterInfo.description || gpu.adapterInfo.architecture || gpu.adapterInfo.vendor || 'this GPU'}: one invocation per pixel, the BVH always on`;
+  $('sRows').textContent = 'loading scene';
+  const packed = await packedScene(scene);
+  if (!current.live) return;
+  if (!packed) {
+    // Too deep for the GPU tracer's stack: render with the workers instead.
+    job = null;
+    $('engine').value = 'cpu';
+    render();
+    return;
+  }
+  gpu.loadScene(packed);
+
+  const canvas = $('gpuout');
+  canvas.width = width; canvas.height = height;
+  if (!gpuContext) {
+    gpuContext = canvas.getContext('webgpu');
+    gpuContext.configure({ device: gpu.device, format: gpu.format, alphaMode: 'opaque' });
+  }
+  const start = performance.now();
+  const show = (done) => {
+    $('bar').style.width = (done / spp) * 100 + '%';
+    $('sTime').textContent = ((performance.now() - start) / 1000).toFixed(2) + ' s';
+    $('sRows').textContent = `${done}/${spp} spp`;
+  };
+  const finished = await gpu.render({
+    width, height, spp, bounces, denoise, seed: Math.floor(Math.random() * 2 ** 32),
+    onStep: (done) => { if (progressive || done === spp) gpu.draw(gpuContext, width, height, denoise); show(done); },
+    next: progressive ? requestAnimationFrame : null,
+  });
+  if (!finished || !current.live) return;
+  const s = (performance.now() - start) / 1000;
+  const rays = await gpu.readStats();
+  show(spp);
+  $('sTime').textContent = s.toFixed(2) + ' s';
+  $('sRays').textContent = human(rays);
+  $('sRate').textContent = human(rays / Math.max(s, 1e-3));
+  if (denoise) $('sRows').textContent = `${spp}/${spp} spp, denoised`;
+  current.live = false;
+  job = null;
+  $('go').disabled = false; $('stop').disabled = true;
+}
+
 function update(j) {
   const s = (performance.now() - j.start) / 1000;
   $('bar').style.width = (j.done / j.total) * 100 + '%';
@@ -218,10 +310,13 @@ function finish(j) {
 
 function stop() {
   denoiseFor = null;
+  if (gpu) gpu.stop();
   if (!job) return;
   job.live = false;
-  pool.forEach((w) => w.terminate());
-  pool = [];
+  if (!job.gpu) {
+    pool.forEach((w) => w.terminate());
+    pool = [];
+  }
   job = null;
   $('go').disabled = false; $('stop').disabled = true;
 }
@@ -243,4 +338,16 @@ if (!params.has('bvh')) bvhForScene();
 
 $('go').onclick = render;
 $('stop').onclick = stop;
-render();
+$('engine').addEventListener('change', () => { stop(); showEngine(); });
+gpuReady.then((g) => {
+  gpu = g;
+  if (!gpu) {
+    // No WebGPU here: the workers it is.
+    $('engine').value = 'cpu';
+    $('engine').querySelector('option[value="gpu"]').disabled = true;
+    $('engine').querySelector('option[value="gpu"]').textContent = 'GPU: WebGPU (not available in this browser)';
+  } else if (!params.has('engine')) {
+    $('engine').value = 'gpu';
+  }
+  render();
+});

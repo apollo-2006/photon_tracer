@@ -189,6 +189,11 @@ public:
         return blocked;
     }
 
+    // The top-level trees, for packing the scene for the GPU (gpu_pack.hpp).
+    const bvh& flat_tree() const { return tree; }
+    const bvh& instances_tree() const { return instance_tree; }
+    bool uses_bvh() const { return bvh_on; }
+
 private:
     struct instance_hit {
         bool found = false;
